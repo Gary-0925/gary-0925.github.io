@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_QUEUE_HEIGHT } from '../data/verdicts'
 import {
-  activateDsu,
   canPlaceCard,
   generateHand,
-  placeSelected,
+  placeCard,
   selectCard,
-  selectDsuQueue,
   startGame,
-  useRollback,
 } from './engine'
 import type { GameState, JudgeCard } from './types'
 
@@ -20,8 +17,13 @@ function card(rank: number): JudgeCard {
   return { uid: `test-${testId}`, kind: 'verdict', rank }
 }
 
-function play(state: GameState, cardUid: string, queueIndex = 0) {
-  return placeSelected(selectCard(state, cardUid), queueIndex, fixedRandom)
+function special(kind: Exclude<JudgeCard['kind'], 'verdict'>): JudgeCard {
+  testId += 1
+  return { uid: `test-${kind}-${testId}`, kind }
+}
+
+function play(state: GameState, cardUid: string, queueIndex = 0, random = fixedRandom) {
+  return placeCard(state, cardUid, queueIndex, random)
 }
 
 describe('Judge Queue engine', () => {
@@ -32,7 +34,6 @@ describe('Judge Queue engine', () => {
     state = play(state, first.uid)
     state = play(state, second.uid)
     expect(state.queues[0].cards.map((item) => item.rank)).toEqual([1])
-    expect(state.insight).toBe(1)
 
     state = play(state, judging.uid)
     expect(state.queues[0].cards.map((item) => item.rank)).toEqual([2])
@@ -40,7 +41,17 @@ describe('Judge Queue engine', () => {
     expect(state.round).toBe(2)
   })
 
-  it('allows a full queue only when the new card immediately merges', () => {
+  it('keeps click selection while also allowing direct card placement', () => {
+    const state = startGame(fixedRandom)
+    const selected = selectCard(state, state.hand[0].uid)
+    expect(selected.selectedId).toBe(state.hand[0].uid)
+
+    const placed = placeCard(selected, state.hand[0].uid, 1, fixedRandom)
+    expect(placed.queues[1].cards).toHaveLength(1)
+    expect(placed.selectedId).toBeUndefined()
+  })
+
+  it('allows a full queue only when a verdict immediately merges', () => {
     const state = startGame(fixedRandom)
     state.queues[0].cards = Array.from(
       { length: MAX_QUEUE_HEIGHT },
@@ -48,9 +59,9 @@ describe('Judge Queue engine', () => {
     )
     const topRank = MAX_QUEUE_HEIGHT - 1
 
-    expect(state.queues[0].cards).toHaveLength(MAX_QUEUE_HEIGHT)
     expect(canPlaceCard(state, card(topRank), 0)).toBe(true)
     expect(canPlaceCard(state, card(topRank - 1), 0)).toBe(false)
+    expect(canPlaceCard(state, special('gdb'), 0)).toBe(true)
   })
 
   it('marks a problem solved and clears its queue when PC merges to AC', () => {
@@ -71,32 +82,44 @@ describe('Judge Queue engine', () => {
     expect(hand.filter((item) => item.kind === 'hack')).toHaveLength(1)
   })
 
-  it('rollback restores the board and hand before the last submission', () => {
+  it('makes O2 risky for verdicts better than RE', () => {
     let state = startGame(fixedRandom)
-    const [first, second] = state.hand
-    state = play(state, first.uid)
-    state = play(state, second.uid)
-    expect(state.queues[0].cards[0].rank).toBe(1)
-    expect(state.insight).toBe(1)
+    const o2 = special('o2')
+    state.queues[0].cards = [card(4)]
+    state.hand = [o2]
 
-    state = useRollback(state)
-    expect(state.queues[0].cards.map((item) => item.rank)).toEqual([0])
-    expect(state.hand.some((item) => item.uid === second.uid)).toBe(true)
-    expect(state.insight).toBe(0)
+    state = play(state, o2.uid, 0, () => 0.1)
+    expect(state.queues[0].cards[0].rank).toBe(2)
+    expect(state.message).toContain('RE')
+
+    const safeState = startGame(fixedRandom)
+    const safeO2 = special('o2')
+    safeState.queues[0].cards = [card(4)]
+    safeState.hand = [safeO2]
+    const promoted = play(safeState, safeO2.uid, 0, () => 0.9)
+    expect(promoted.queues[0].cards[0].rank).toBe(5)
   })
 
-  it('union merges matching tops across two queues', () => {
-    let state = startGame(fixedRandom)
-    state.queues[0].cards = [card(3)]
-    state.queues[1].cards = [card(3)]
-    state.insight = 4
+  it('applies GDB, long long, and Subtask to their intended verdicts', () => {
+    let gdbState = startGame(fixedRandom)
+    const gdb = special('gdb')
+    gdbState.queues[0].cards = [card(2)]
+    gdbState.hand = [gdb]
+    gdbState = play(gdbState, gdb.uid)
+    expect(gdbState.queues[0].cards).toEqual([])
 
-    state = activateDsu(state)
-    state = selectDsuQueue(state, 0)
-    state = selectDsuQueue(state, 1)
+    let longState = startGame(fixedRandom)
+    const longLong = special('longLong')
+    longState.queues[0].cards = [card(5)]
+    longState.hand = [longLong]
+    longState = play(longState, longLong.uid)
+    expect(longState.queues[0].cards[0].rank).toBe(6)
 
-    expect(state.queues[0].cards).toEqual([])
-    expect(state.queues[1].cards.map((item) => item.rank)).toEqual([4])
-    expect(state.insight).toBe(0)
+    let subtaskState = startGame(fixedRandom)
+    const subtask = special('subtask')
+    subtaskState.queues[0].cards = [card(4)]
+    subtaskState.hand = [subtask]
+    subtaskState = play(subtaskState, subtask.uid)
+    expect(subtaskState.queues[0].cards[0].rank).toBe(6)
   })
 })

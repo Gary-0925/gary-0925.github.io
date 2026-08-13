@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   BrainCircuit,
+  Grip,
   HelpCircle,
+  MousePointerClick,
   RotateCcw,
   Trophy,
   Volume2,
@@ -11,16 +13,13 @@ import {
 import { PROBLEM_QUEUES, VERDICTS } from './data/verdicts'
 import { playSound, setSoundEnabled } from './game/audio'
 import {
-  activateDsu,
   canPlaceCard,
   createInitialState,
-  memoizeSelected,
+  placeCard,
   placeSelected,
   selectCard,
-  selectDsuQueue,
   startGame,
   turnsUntilHack,
-  useRollback,
 } from './game/engine'
 import type { GameState } from './game/types'
 import { CoverScreen } from './components/CoverScreen'
@@ -28,7 +27,7 @@ import { EndOverlay } from './components/EndOverlay'
 import { JudgeCardView } from './components/JudgeCardView'
 import { QueueColumn } from './components/QueueColumn'
 import { RulesModal } from './components/RulesModal'
-import { ToolBar } from './components/ToolBar'
+import { SpecialGuide } from './components/SpecialGuide'
 
 const BEST_SCORE_KEY = 'judge-queue-best-score'
 
@@ -45,7 +44,7 @@ function soundForState(previous: GameState, next: GameState) {
   if (next.lastEvent === 'merge') playSound('chain')
   else if (next.lastEvent === 'ac') playSound('win')
   else if (next.lastEvent === 'hack' || next.lastEvent === 'afo') playSound('enemy')
-  else if (next.lastEvent === 'tool') playSound('ink')
+  else if (next.lastEvent === 'special') playSound('ink')
   else playSound('paper')
 }
 
@@ -54,6 +53,7 @@ export default function App() {
   const [showRules, setShowRules] = useState(false)
   const [soundEnabled, setSound] = useState(true)
   const [bestScore, setBestScore] = useState(readBestScore)
+  const [draggingId, setDraggingId] = useState<string>()
 
   const apply = useCallback((action: (current: GameState) => GameState) => {
     setState((current) => {
@@ -65,6 +65,7 @@ export default function App() {
 
   const begin = useCallback(() => {
     playSound('paper')
+    setDraggingId(undefined)
     setState(startGame())
   }, [])
 
@@ -87,16 +88,25 @@ export default function App() {
     () => state.hand.find((card) => card.uid === state.selectedId),
     [state.hand, state.selectedId],
   )
+  const draggingCard = useMemo(
+    () => state.hand.find((card) => card.uid === draggingId),
+    [state.hand, draggingId],
+  )
+  const activeCard = draggingCard ?? selectedCard
+
+  const submitCard = useCallback(
+    (cardUid: string, queueIndex: number) => {
+      apply((current) => placeCard(current, cardUid, queueIndex))
+      setDraggingId(undefined)
+    },
+    [apply],
+  )
 
   const placeInQueue = useCallback(
     (index: number) => {
-      if (state.toolMode === 'dsu') {
-        apply((current) => selectDsuQueue(current, index))
-      } else {
-        apply((current) => placeSelected(current, index))
-      }
+      if (state.selectedId) apply((current) => placeSelected(current, index))
     },
-    [apply, state.toolMode],
+    [apply, state.selectedId],
   )
 
   useEffect(() => {
@@ -120,10 +130,7 @@ export default function App() {
       if (queueIndex >= 0) {
         event.preventDefault()
         placeInQueue(queueIndex)
-        return
       }
-      if (event.key.toLowerCase() === 'z') apply(useRollback)
-      if (event.key.toLowerCase() === 'm') apply(memoizeSelected)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -176,18 +183,17 @@ export default function App() {
 
           <div className="queue-grid">
             {state.queues.map((queue, index) => {
-              const valid = state.toolMode === 'dsu'
-                ? Boolean(queue.cards.at(-1))
-                : Boolean(selectedCard && canPlaceCard(state, selectedCard, index))
+              const valid = Boolean(activeCard && canPlaceCard(state, activeCard, index))
               return (
                 <QueueColumn
                   key={PROBLEM_QUEUES[index].number}
                   queue={queue}
                   index={index}
-                  active={Boolean(selectedCard) || state.toolMode === 'dsu'}
+                  active={Boolean(activeCard)}
                   valid={valid}
-                  dsuSource={state.dsuSource === index}
+                  dragging={Boolean(draggingCard)}
                   onClick={() => placeInQueue(index)}
+                  onDropCard={() => draggingCard && submitCard(draggingCard.uid, index)}
                 />
               )
             })}
@@ -212,12 +218,7 @@ export default function App() {
             </div>
           </section>
 
-          <ToolBar
-            state={state}
-            onRollback={() => apply(useRollback)}
-            onMemo={() => apply(memoizeSelected)}
-            onDsu={() => apply(activateDsu)}
-          />
+          <SpecialGuide />
 
           <section className="legend-section">
             <div className="section-label"><span>Verdict 合并表</span><BrainCircuit size={15} /></div>
@@ -236,7 +237,7 @@ export default function App() {
         <div className="hand-copy">
           <p className="eyebrow">WAITING · {state.hand.length}/3</p>
           <h2>待提交</h2>
-          <span>{selectedCard ? '选择一条发光的队列' : '先选择一张牌'}</span>
+          <span className="desktop-drag-hint"><Grip /> 可直接拖入队列</span>
         </div>
         <div className="hand-cards">
           {state.hand.map((card, index) => (
@@ -246,15 +247,32 @@ export default function App() {
               index={index}
               selected={state.selectedId === card.uid}
               onClick={() => apply((current) => selectCard(current, card.uid))}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData('text/plain', card.uid)
+                setDraggingId(card.uid)
+              }}
+              onDragEnd={() => setDraggingId(undefined)}
             />
           ))}
           {Array.from({ length: 3 - state.hand.length }, (_, index) => (
             <div className="empty-hand-card" key={`empty-${index}`}>已处理</div>
           ))}
         </div>
-        <div className="round-rule">
-          <b>本轮不可弃牌</b>
-          <span>全部处理后自动发下一组</span>
+        <div className={`quick-submit ${selectedCard ? 'visible' : ''}`}>
+          <span><MousePointerClick /> {selectedCard ? '快速提交到' : '点选卡片后提交'}</span>
+          <div>
+            {PROBLEM_QUEUES.map((problem, index) => (
+              <button
+                key={problem.number}
+                type="button"
+                disabled={!selectedCard || !canPlaceCard(state, selectedCard, index)}
+                onClick={() => selectedCard && submitCard(selectedCard.uid, index)}
+              >
+                {problem.number}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
