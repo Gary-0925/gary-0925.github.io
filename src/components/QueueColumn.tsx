@@ -1,4 +1,5 @@
-import { Check, LockKeyhole } from 'lucide-react'
+import type { DragEvent } from 'react'
+import { Check, Download, LockKeyhole } from 'lucide-react'
 import { MAX_QUEUE_HEIGHT, PROBLEM_QUEUES } from '../data/verdicts'
 import type { QueueState } from '../game/types'
 import { JudgeCardView } from './JudgeCardView'
@@ -8,8 +9,9 @@ interface QueueColumnProps {
   index: number
   active: boolean
   valid: boolean
-  dsuSource: boolean
+  dragging: boolean
   onClick: () => void
+  onDropCard: () => void
 }
 
 export function QueueColumn({
@@ -17,18 +19,33 @@ export function QueueColumn({
   index,
   active,
   valid,
-  dsuSource,
+  dragging,
   onClick,
+  onDropCard,
 }: QueueColumnProps) {
   const problem = PROBLEM_QUEUES[index]
   const free = MAX_QUEUE_HEIGHT - queue.cards.length
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!valid) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    if (valid) onDropCard()
+  }
 
   return (
     <div
       role="button"
       tabIndex={active ? 0 : -1}
-      className={`queue-column ${active ? 'active' : ''} ${valid ? 'valid' : ''} ${dsuSource ? 'dsu-source' : ''}`}
+      data-queue-index={index}
+      className={`queue-column ${active ? 'active' : ''} ${valid ? 'valid' : ''} ${dragging ? 'drag-target' : ''}`}
       onClick={onClick}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
@@ -68,8 +85,11 @@ export function QueueColumn({
         {queue.cards.length === 0 && (
           <div className="empty-queue">
             <LockKeyhole size={18} />
-            <span>选择此队列</span>
+            <span>空队列</span>
           </div>
+        )}
+        {dragging && valid && (
+          <div className="drop-indicator"><Download /> 松开提交</div>
         )}
       </div>
 

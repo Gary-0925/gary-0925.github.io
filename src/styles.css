@@ -480,9 +480,31 @@ button:focus-visible,
   box-shadow: 0 7px 0 rgba(72, 130, 91, 0.2);
 }
 
-.queue-column.dsu-source {
+.queue-column.drag-target.valid {
   border-color: #326d91;
-  box-shadow: 0 0 0 3px rgba(50, 109, 145, 0.2);
+  box-shadow: 0 0 0 4px rgba(50, 109, 145, 0.2), 0 12px 28px rgba(34, 74, 96, 0.13);
+  transform: translateY(-5px);
+}
+
+.drop-indicator {
+  position: absolute;
+  inset: 8px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 2px dashed #326d91;
+  border-radius: 7px;
+  background: rgba(229, 240, 242, 0.9);
+  color: #285f7e;
+  font-size: 0.7rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.drop-indicator svg {
+  width: 18px;
 }
 
 .queue-header {
@@ -744,18 +766,28 @@ kbd {
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  padding: 13px;
+  padding: 10px 12px;
   text-align: left;
 }
 
+.special-card[draggable='true'],
+.verdict-card[draggable='true'] {
+  cursor: grab;
+}
+
+.special-card[draggable='true']:active,
+.verdict-card[draggable='true']:active {
+  cursor: grabbing;
+}
+
 .special-card svg {
-  width: 22px;
-  height: 22px;
-  margin-bottom: 8px;
+  width: 20px;
+  height: 20px;
+  margin-bottom: 4px;
 }
 
 .special-card strong {
-  font: 700 1.6rem/1 'IBM Plex Mono', monospace;
+  font: 700 1.35rem/1 'IBM Plex Mono', monospace;
 }
 
 .special-card > span:not(.card-key) {
@@ -765,19 +797,29 @@ kbd {
 }
 
 .special-card small {
-  margin-top: 8px;
-  opacity: 0.7;
-  font-size: 0.56rem;
+  display: -webkit-box;
+  margin-top: 5px;
+  overflow: hidden;
+  opacity: 0.72;
+  font-size: 0.52rem;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.o2-card {
+.boost-card {
   color: #174d50;
   background: #a6d5d1;
 }
 
-.hack-card {
+.danger-card {
   color: #772c2e;
   background: #e8a7a3;
+}
+
+.utility-card {
+  color: #354f6f;
+  background: #bfd1df;
 }
 
 .special-card.compact {
@@ -823,13 +865,6 @@ kbd {
   font: 600 0.63rem 'IBM Plex Mono', monospace;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-.insight-count {
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: #e4e9e6;
-  color: var(--green);
 }
 
 .problem-checklist {
@@ -898,89 +933,64 @@ kbd {
   background: #f2d8d3;
 }
 
-.tool-grid {
+.special-guide-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
-.tool-card {
-  width: 100%;
-  min-height: 45px;
+.guide-item {
+  min-height: 43px;
   display: grid;
-  grid-template-columns: 28px 1fr auto;
+  grid-template-columns: 39px 1fr auto;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: #faf7ee;
-  color: var(--ink);
-  text-align: left;
-  cursor: pointer;
-  transition: 130ms ease;
 }
 
-.tool-card:hover:not(:disabled),
-.tool-card.engaged {
-  border-color: #4b7994;
-  background: #e8f0f2;
-  transform: translateX(2px);
+.guide-item > b {
+  display: grid;
+  place-items: center;
+  min-height: 27px;
+  border-radius: 4px;
+  background: #dfe8eb;
+  color: #315f7d;
+  font: 700 0.65rem 'IBM Plex Mono', monospace;
 }
 
-.tool-card:disabled {
-  opacity: 0.38;
-  cursor: not-allowed;
+.guide-item.danger > b {
+  background: #efd5d0;
+  color: #8b3935;
 }
 
-.tool-card > svg {
-  width: 18px;
-  color: var(--blue);
+.guide-item.boost > b {
+  background: #d9ebe5;
+  color: #276549;
 }
 
-.tool-card > span {
+.guide-item > span {
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-.tool-card strong {
-  font-size: 0.7rem;
+.guide-item strong {
+  font-size: 0.65rem;
 }
 
-.tool-card small {
+.guide-item small {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 0.57rem;
+  font-size: 0.52rem;
+  line-height: 1.35;
 }
 
-.tool-card > b {
+.guide-item > svg {
+  width: 14px;
   color: var(--red);
-  font: 600 0.6rem 'IBM Plex Mono', monospace;
-}
-
-.cache-slot {
-  min-height: 50px;
-  display: grid;
-  grid-template-columns: 56px 1fr;
-  align-items: center;
-  gap: 8px;
-  margin-top: 9px;
-  padding: 6px;
-  border: 1px dashed var(--border);
-  border-radius: 5px;
-}
-
-.cache-slot > span,
-.cache-slot > em {
-  color: #96938a;
-  font: 0.56rem 'IBM Plex Mono', monospace;
-  font-style: normal;
-}
-
-.cache-slot .judge-card {
-  height: 37px;
-  min-height: 37px;
-  margin: 0;
 }
 
 .mini-legend {
@@ -1063,6 +1073,74 @@ kbd {
   border-radius: 8px;
   color: #aaa69b;
   font: 0.58rem 'IBM Plex Mono', monospace;
+}
+
+.desktop-drag-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.desktop-drag-hint svg {
+  width: 13px;
+}
+
+.quick-submit {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-left: 15px;
+  border-left: 2px solid #b9b4a8;
+  opacity: 0.52;
+  transition: 150ms ease;
+}
+
+.quick-submit.visible {
+  border-color: var(--blue);
+  opacity: 1;
+}
+
+.quick-submit > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+
+.quick-submit > span svg {
+  width: 14px;
+}
+
+.quick-submit > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+
+.quick-submit button {
+  height: 33px;
+  border: 1px solid #7290a1;
+  border-radius: 5px;
+  background: #e7eef0;
+  color: #2f617e;
+  font: 700 0.68rem 'IBM Plex Mono', monospace;
+  cursor: pointer;
+  transition: 120ms ease;
+}
+
+.quick-submit button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  background: #d8e8eb;
+  box-shadow: 0 3px 0 rgba(49, 95, 125, 0.2);
+}
+
+.quick-submit button:disabled {
+  border-color: #d0cbc0;
+  background: #ebe7de;
+  color: #aaa69d;
+  cursor: not-allowed;
 }
 
 .round-rule {
@@ -1169,6 +1247,46 @@ kbd {
   color: #99968d;
 }
 
+.special-rule-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+
+.special-rule-grid > div {
+  display: grid;
+  grid-template-columns: 45px 1fr;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: rgba(255, 253, 247, 0.6);
+}
+
+.special-rule-grid > div > b {
+  color: var(--blue);
+  font: 700 0.66rem 'IBM Plex Mono', monospace;
+  text-align: center;
+}
+
+.special-rule-grid span {
+  display: flex;
+  flex-direction: column;
+}
+
+.special-rule-grid strong {
+  font-size: 0.65rem;
+}
+
+.special-rule-grid small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.53rem;
+  line-height: 1.4;
+}
+
 .rule-note {
   padding: 13px 15px;
   border-left: 3px solid var(--blue);
@@ -1180,6 +1298,18 @@ kbd {
 
 .rule-note strong {
   color: var(--ink);
+}
+
+.drag-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drag-note > svg {
+  width: 20px;
+  flex: 0 0 auto;
+  color: var(--blue);
 }
 
 .keyboard-note {
@@ -1300,11 +1430,8 @@ kbd {
   }
 
   .hand-dock {
-    grid-template-columns: 115px 1fr;
-  }
-
-  .round-rule {
-    display: none;
+    grid-template-columns: 105px 1fr 165px;
+    gap: 14px;
   }
 }
 
@@ -1323,14 +1450,14 @@ kbd {
   }
 
   .game-layout {
-    width: calc(100% - 20px);
-    padding-top: 12px;
-    padding-bottom: 220px;
+    width: calc(100% - 16px);
+    padding-top: 8px;
+    padding-bottom: 205px;
   }
 
   .board-section {
-    padding: 12px;
-    overflow-x: auto;
+    padding: 10px;
+    overflow: visible;
   }
 
   .board-heading {
@@ -1344,16 +1471,34 @@ kbd {
   }
 
   .queue-grid {
-    min-width: 620px;
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .queue-header {
+    min-height: 46px;
+    padding: 7px 8px;
+  }
+
+  .problem-meta {
+    height: 29px;
+    padding: 0 8px;
   }
 
   .queue-stack {
-    height: 292px;
+    height: 214px;
+    padding: 6px;
+  }
+
+  .queue-slots,
+  .queue-card-list {
+    inset: 6px;
   }
 
   .queue-card-list .judge-card {
-    height: 50px;
-    min-height: 50px;
+    height: 46px;
+    min-height: 46px;
   }
 
   .side-panel {
@@ -1367,27 +1512,16 @@ kbd {
   }
 
   .hand-dock {
-    width: calc(100% - 16px);
-    min-height: 172px;
-    bottom: 8px;
+    width: calc(100% - 12px);
+    min-height: 0;
+    bottom: 6px;
     grid-template-columns: 1fr;
-    gap: 9px;
-    padding: 10px;
+    gap: 7px;
+    padding: 8px;
   }
 
   .hand-copy {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-  }
-
-  .hand-copy h2 {
-    margin: 0;
-    font-size: 0.82rem;
-  }
-
-  .hand-copy > span {
-    margin-left: auto;
+    display: none;
   }
 
   .hand-cards {
@@ -1397,7 +1531,34 @@ kbd {
 
   .hand-cards .judge-card,
   .empty-hand-card {
-    height: 113px;
+    height: 105px;
+  }
+
+  .hand-cards .special-card small {
+    max-height: 2.7em;
+    overflow: hidden;
+  }
+
+  .quick-submit {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .quick-submit > span {
+    white-space: nowrap;
+  }
+
+  .quick-submit > div {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .quick-submit button {
+    height: 31px;
   }
 
   .cover-screen {
@@ -1442,6 +1603,18 @@ kbd {
 
   .rules-modal {
     padding: 28px 20px;
+  }
+
+  .special-rule-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-header strong {
+    font-size: 0.7rem;
+  }
+
+  .problem-meta code {
+    display: none;
   }
 
   .result-grid {

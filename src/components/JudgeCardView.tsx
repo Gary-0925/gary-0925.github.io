@@ -1,6 +1,15 @@
-import { Gauge, ShieldAlert, Sparkles } from 'lucide-react'
-import { VERDICTS } from '../data/verdicts'
-import type { JudgeCard } from '../game/types'
+import type { DragEvent } from 'react'
+import {
+  Binary,
+  BugOff,
+  Gauge,
+  PieChart,
+  ShieldAlert,
+  Sparkles,
+  Zap,
+} from 'lucide-react'
+import { SPECIAL_CARDS, VERDICTS } from '../data/verdicts'
+import type { CardKind, JudgeCard } from '../game/types'
 
 interface JudgeCardViewProps {
   card: JudgeCard
@@ -9,6 +18,17 @@ interface JudgeCardViewProps {
   disabled?: boolean
   index?: number
   onClick?: () => void
+  onDragStart?: (event: DragEvent<HTMLButtonElement>) => void
+  onDragEnd?: () => void
+}
+
+const SPECIAL_ICONS: Record<Exclude<CardKind, 'verdict'>, typeof Gauge> = {
+  o2: Gauge,
+  o3: Zap,
+  hack: ShieldAlert,
+  gdb: BugOff,
+  longLong: Binary,
+  subtask: PieChart,
 }
 
 export function JudgeCardView({
@@ -18,39 +38,28 @@ export function JudgeCardView({
   disabled = false,
   index,
   onClick,
+  onDragStart,
+  onDragEnd,
 }: JudgeCardViewProps) {
-  if (card.kind === 'o2') {
+  if (card.kind !== 'verdict') {
+    const definition = SPECIAL_CARDS[card.kind]
+    const Icon = SPECIAL_ICONS[card.kind]
     return (
       <button
-        className={`judge-card special-card o2-card ${compact ? 'compact' : ''} ${selected ? 'selected' : ''}`}
+        className={`judge-card special-card ${definition.tone}-card ${compact ? 'compact' : ''} ${selected ? 'selected' : ''}`}
         onClick={onClick}
         disabled={disabled}
         type="button"
         aria-pressed={selected}
+        draggable={!compact && Boolean(onDragStart)}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
       >
         {!compact && index !== undefined && <span className="card-key">{index + 1}</span>}
-        <Gauge aria-hidden="true" />
-        <strong>O2</strong>
-        <span>吸氧</span>
-        {!compact && <small>队尾状态升一级</small>}
-      </button>
-    )
-  }
-
-  if (card.kind === 'hack') {
-    return (
-      <button
-        className={`judge-card special-card hack-card ${compact ? 'compact' : ''} ${selected ? 'selected' : ''}`}
-        onClick={onClick}
-        disabled={disabled}
-        type="button"
-        aria-pressed={selected}
-      >
-        {!compact && index !== undefined && <span className="card-key">{index + 1}</span>}
-        <ShieldAlert aria-hidden="true" />
-        <strong>Hack</strong>
-        <span>加强数据</span>
-        {!compact && <small>队尾状态降一级</small>}
+        <Icon aria-hidden="true" />
+        <strong>{definition.label}</strong>
+        <span>{definition.name}</span>
+        {!compact && <small>{definition.description}</small>}
       </button>
     )
   }
@@ -70,6 +79,9 @@ export function JudgeCardView({
       type="button"
       aria-label={`${verdict.label}，${verdict.fullName}`}
       aria-pressed={selected}
+      draggable={!compact && Boolean(onDragStart)}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
     >
       {!compact && index !== undefined && <span className="card-key">{index + 1}</span>}
       {card.rank === VERDICTS.length - 1 && <Sparkles className="card-spark" aria-hidden="true" />}
