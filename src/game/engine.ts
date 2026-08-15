@@ -4,9 +4,15 @@ import {
   GENERATED_SHAPES,
   VERDICTS,
 } from '../data/verdicts'
+import {
+  MAX_MACHINE_SCORE,
+  MAX_TOTAL_SCORE,
+  formatTotalScore,
+} from './score'
 import type {
   BoardPiece,
   Direction,
+  GameAction,
   GameState,
   MessageTone,
   PieceMotion,
@@ -20,7 +26,7 @@ interface RandomContext {
   nextId: number
 }
 
-const BOARD_LABELS = ['A', 'B', 'C', 'D', 'E', 'F']
+const BOARD_LABELS = ['D1T1', 'D1T2', 'D1T3', 'D2T1', 'D2T2', 'D2T3']
 const SUBTASK_SCORES = [10, 20, 30, 40, 50, 60, 70, 80, 90]
 
 function hashSeed(seed: string) {
@@ -172,13 +178,17 @@ function availableO2Placements(board: ProblemBoard) {
 }
 
 function chooseSpawnSubtask(board: ProblemBoard, context: RandomContext) {
+  const unit = unitSubtask(board)
+  const jackpot = jackpotSubtask(board)
   const roll = nextRandom(context)
-  if (roll < 0.8) return board.subtasks[0]
+  if (roll < 0.8) return unit
   if (roll < 0.985) {
-    const middle = board.subtasks.slice(1, -1)
+    const middle = board.subtasks.filter(
+      (item) => item.id !== unit.id && item.id !== jackpot.id,
+    )
     return middle[Math.floor(nextRandom(context) * middle.length)]
   }
-  return board.subtasks.at(-1)!
+  return jackpot
 }
 
 function spawnPiece(
@@ -224,20 +234,45 @@ function spawnPiece(
   return undefined
 }
 
-function generateSubtasks(boardId: string, context: RandomContext) {
-  const generatedShapes = shuffle(GENERATED_SHAPES, context).slice(0, 3)
-  const scores = shuffle(SUBTASK_SCORES, context).slice(0, 4)
-  const shapes = [
-    { rows: 1, cols: 1 },
-    ...generatedShapes,
-    { rows: 3, cols: 3 },
-  ]
-  return shapes.map((shape, index): SubtaskDefinition => ({
+/** T1 on either day is the easy problem: three tiers, and its 100 is a 2x2. */
+export function isEasyProblem(label: string) {
+  return label.endsWith('T1')
+}
+
+function generateSubtasks(
+  boardId: string,
+  context: RandomContext,
+  easy: boolean,
+) {
+  // The jackpot shape is excluded from the pool so the middle tiers can never
+  // duplicate it.
+  const jackpotShape = easy ? { rows: 2, cols: 2 } : { rows: 3, cols: 3 }
+  const pool = GENERATED_SHAPES.filter(
+    (shape) => !(shape.rows === jackpotShape.rows && shape.cols === jackpotShape.cols),
+  )
+  const middleCount = easy ? 1 : 3
+  const generatedShapes = shuffle(pool, context).slice(0, middleCount)
+  const scores = shuffle(SUBTASK_SCORES, context).slice(0, middleCount + 1)
+  const shapes = [{ rows: 1, cols: 1 }, ...generatedShapes, jackpotShape]
+  const subtasks = shapes.map((shape, index): SubtaskDefinition => ({
     id: `${boardId}-subtask-${index + 1}`,
     rows: shape.rows,
     cols: shape.cols,
     maxScore: index === shapes.length - 1 ? 100 : scores[index],
   }))
+  // Stored low to high so every reader (board key, tooltips) is ordered by value.
+  return subtasks.sort((left, right) => left.maxScore - right.maxScore)
+}
+
+// The 1x1 subtask is the spawn/fill unit and the 100 point one is the jackpot.
+// The jackpot is found by score because its shape differs between T1 and the
+// harder problems.
+function unitSubtask(board: ProblemBoard) {
+  return board.subtasks.find((item) => item.rows === 1 && item.cols === 1)!
+}
+
+function jackpotSubtask(board: ProblemBoard) {
+  return board.subtasks.find((item) => item.maxScore === 100)!
 }
 
 function createBoard(label: string, context: RandomContext): ProblemBoard {
@@ -246,12 +281,13 @@ function createBoard(label: string, context: RandomContext): ProblemBoard {
     id,
     label,
     status: 'active',
-    subtasks: generateSubtasks(id, context),
+    subtasks: generateSubtasks(id, context, isEasyProblem(label)),
     pieces: [],
     currentScore: 0,
   }
-  spawnPiece(board, context, board.subtasks[0])
-  spawnPiece(board, context, board.subtasks[0])
+  const unit = unitSubtask(board)
+  spawnPiece(board, context, unit)
+  spawnPiece(board, context, unit)
   return board
 }
 
@@ -268,6 +304,7 @@ export function startGame(seed = 'AKNOI'): GameState {
     rngState: context.rngState,
     nextId: context.nextId,
     boards,
+    history: [],
     motion: [],
     spawnedPieceIds: [],
     contestScore: 0,
@@ -412,7 +449,7 @@ export function hasAnyMove(board: ProblemBoard) {
 }
 
 function isBoardFull(board: ProblemBoard) {
-  return availablePlacements(board, board.subtasks[0]).length === 0
+  return availablePlacements(board, unitSubtask(board)).length === 0
 }
 
 function refreshBoardScore(board: ProblemBoard) {
@@ -436,7 +473,11 @@ function finishIfComplete(state: GameState) {
   if (!state.boards.every((board) => board.status === 'submitted')) return
   state.screen = 'finished'
   state.lastEvent = 'finish'
-  setMessage(state, `比赛结束：${state.contestScore} / 600。`, state.contestScore === 600 ? 'good' : 'warn')
+  setMessage(
+    state,
+    `比赛结束：${formatTotalScore(state.contestScore)} / ${MAX_TOTAL_SCORE}。`,
+    state.contestScore === MAX_MACHINE_SCORE ? 'good' : 'warn',
+  )
 }
 
 export function finishAnimation(current: GameState): GameState {
@@ -453,11 +494,12 @@ export function moveBoard(current: GameState, direction: Direction): GameState {
   if (!plans.some((plan) => plan?.changed)) return current
 
   const state = clone(current)
+  state.history.push({ type: 'move', direction })
   state.motion = []
   state.spawnedPieceIds = []
   state.moves += 1
   let totalMerges = 0
-  const autoSubmitted: string[] = []
+  const stuck: string[] = []
 
   state.boards.forEach((board, index) => {
     const plan = plans[index]
@@ -475,25 +517,19 @@ export function moveBoard(current: GameState, direction: Direction): GameState {
     if (spawnedId) state.spawnedPieceIds.push(spawnedId)
     refreshBoardScore(board)
 
-    if (!spawnedId || isBoardFull(board) || !hasAnyMove(board)) {
-      board.status = 'submitted'
-      board.submittedScore = board.currentScore
-      board.autoSubmitted = true
-      autoSubmitted.push(board.label)
-    }
+    if (isBoardFull(board) && !hasAnyMove(board)) stuck.push(board.label)
   })
 
   refreshContest(state)
   state.lastEvent = totalMerges > 0 ? 'merge' : 'move'
   const parts: string[] = []
   if (totalMerges) parts.push(`合并 ${totalMerges} 次`)
-  if (autoSubmitted.length) parts.push(`${autoSubmitted.join('、')} 题自动提交`)
+  if (stuck.length) parts.push(`${stuck.join('、')} 已无法移动，可手动提交`)
   setMessage(
     state,
     parts.length ? parts.join('；') : '六题继续评测。',
-    autoSubmitted.length ? 'warn' : totalMerges ? 'good' : 'neutral',
+    stuck.length ? 'warn' : totalMerges ? 'good' : 'neutral',
   )
-  finishIfComplete(state)
   return state
 }
 
@@ -503,14 +539,31 @@ export function submitBoard(current: GameState, boardId: string): GameState {
   if (!currentBoard || currentBoard.status !== 'active') return current
 
   const state = clone(current)
+  state.history.push({ type: 'submit', boardId })
   const board = state.boards.find((item) => item.id === boardId)!
   refreshBoardScore(board)
   board.status = 'submitted'
   board.submittedScore = board.currentScore
-  board.autoSubmitted = false
   state.lastEvent = 'submit'
   refreshContest(state)
-  setMessage(state, `${board.label} 题已提交：${board.submittedScore} 分。`, board.submittedScore > 0 ? 'good' : 'warn')
+  setMessage(state, `${board.label} 已提交：${board.submittedScore} 分。`, board.submittedScore > 0 ? 'good' : 'warn')
   finishIfComplete(state)
   return state
+}
+
+/**
+ * Rebuilds a game from its seed and recorded actions. The engine is fully
+ * deterministic, so this is enough to restore a session without storing pieces.
+ * Actions that no longer apply are skipped rather than throwing.
+ */
+export function replayGame(seed: string, actions: GameAction[]): GameState {
+  let state = startGame(seed)
+  for (const action of actions) {
+    const next =
+      action.type === 'move'
+        ? moveBoard(state, action.direction)
+        : submitBoard(state, action.boardId)
+    state = finishAnimation(next)
+  }
+  return finishAnimation(state)
 }

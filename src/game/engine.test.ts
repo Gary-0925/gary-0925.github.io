@@ -6,6 +6,7 @@ import {
   moveBoard,
   pieceScore,
   piecesOverlap,
+  replayGame,
   startGame,
   submitBoard,
 } from './engine'
@@ -44,7 +45,6 @@ function isolatedState(pieces: BoardPiece[]): GameState {
     board.status = index === 0 ? 'active' : 'submitted'
     board.currentScore = 0
     board.submittedScore = index === 0 ? undefined : 0
-    board.autoSubmitted = false
   })
   state.motion = []
   state.spawnedPieceIds = []
@@ -81,16 +81,36 @@ describe('AKNOI seeded engine', () => {
     expect(state.boards.some((board) => board.pieces.some((item) => item.kind === 'o2'))).toBe(true)
   })
 
-  it('generates unique subtask shapes and a 3x3 100-point subtask per problem', () => {
+  it('generates unique subtask shapes and a 100-point jackpot per problem', () => {
     const state = startGame('SUBTASKS')
     for (const board of state.boards) {
-      expect(board.subtasks).toHaveLength(5)
+      // T1 is the easy problem on both days: three tiers with a 2x2 jackpot.
+      const easy = board.label.endsWith('T1')
+      expect(board.subtasks).toHaveLength(easy ? 3 : 5)
       const shapes = board.subtasks.map((item) => `${item.rows}x${item.cols}`)
-      expect(new Set(shapes).size).toBe(5)
-      expect(board.subtasks).toContainEqual(expect.objectContaining({ rows: 3, cols: 3, maxScore: 100 }))
+      expect(new Set(shapes).size).toBe(easy ? 3 : 5)
+      expect(board.subtasks).toContainEqual(
+        expect.objectContaining(
+          easy ? { rows: 2, cols: 2, maxScore: 100 } : { rows: 3, cols: 3, maxScore: 100 },
+        ),
+      )
+      expect(board.subtasks).toContainEqual(expect.objectContaining({ rows: 1, cols: 1 }))
     }
     const scoreSets = state.boards.map((board) => board.subtasks.map((item) => item.maxScore).join(','))
     expect(new Set(scoreSets).size).toBeGreaterThan(1)
+  })
+
+  it('gives both T1 problems three tiers and the harder problems five', () => {
+    const state = startGame('TIERS')
+    const byLabel = Object.fromEntries(state.boards.map((board) => [board.label, board]))
+    expect(byLabel['D1T1'].subtasks).toHaveLength(3)
+    expect(byLabel['D2T1'].subtasks).toHaveLength(3)
+    for (const label of ['D1T2', 'D1T3', 'D2T2', 'D2T3']) {
+      expect(byLabel[label].subtasks, label).toHaveLength(5)
+    }
+    for (const label of ['D1T1', 'D2T1']) {
+      expect(byLabel[label].subtasks.at(-1), label).toMatchObject({ rows: 2, cols: 2, maxScore: 100 })
+    }
   })
 
   it('uses the requested verdict score multipliers', () => {
@@ -207,8 +227,8 @@ describe('AKNOI seeded engine', () => {
   it('moves every unsubmitted problem while leaving submitted problems frozen', () => {
     const state = startGame('GLOBAL')
     state.boards.forEach((board, index) => {
-      const subtaskId = board.subtasks[0].id
-      board.pieces = [piece(subtaskId, 0, 3, 3)]
+      const unit = board.subtasks.find((item) => item.rows === 1 && item.cols === 1)!
+      board.pieces = [piece(unit.id, 0, 3, 3)]
       if (index === 5) {
         board.status = 'submitted'
         board.submittedScore = 0
@@ -242,7 +262,6 @@ describe('AKNOI seeded engine', () => {
       status: 'submitted',
       currentScore: 40,
       submittedScore: 40,
-      autoSubmitted: false,
     })
     const snapshot = structuredClone(submitted.boards[0].pieces)
     const moved = moveBoard(submitted, 'left')
@@ -250,7 +269,7 @@ describe('AKNOI seeded engine', () => {
     expect(moved.boards[0].submittedScore).toBe(40)
   })
 
-  it('automatically submits a full board at its current maximum', () => {
+  it('never submits a board on its own, even when it fills up', () => {
     const pieces: BoardPiece[] = []
     for (let row = 0; row < 6; row += 1) {
       for (let col = 0; col < 6; col += 1) {
@@ -261,11 +280,90 @@ describe('AKNOI seeded engine', () => {
     const state = isolatedState(pieces)
     state.boards[0].currentScore = 5
     const moved = moveBoard(state, 'right')
-    expect(activeBoard(moved)).toMatchObject({
-      status: 'submitted',
-      submittedScore: 5,
-      autoSubmitted: true,
-    })
+    expect(activeBoard(moved)).toMatchObject({ status: 'active' })
+    expect(activeBoard(moved).submittedScore).toBeUndefined()
+    expect(moved.screen).toBe('playing')
+  })
+
+  it('keeps a locked board playable until the player submits it', () => {
+    const pieces: BoardPiece[] = []
+    for (let row = 0; row < 6; row += 1) {
+      for (let col = 0; col < 6; col += 1) {
+        pieces.push(piece('single-50', 5 + ((row + col) % 2), row, col))
+      }
+    }
+    const state = isolatedState(pieces)
+    for (const direction of ['left', 'right', 'up', 'down'] as const) {
+      const moved = moveBoard(state, direction)
+      expect(activeBoard(moved).status).toBe('active')
+      expect(moved.screen).toBe('playing')
+    }
+    const submitted = submitBoard(state, state.boards[0].id)
+    expect(submitted.boards[0]).toMatchObject({ status: 'submitted', submittedScore: 50 })
+    expect(submitted.screen).toBe('finished')
+  })
+
+  it('sorts every problem subtask key from the lowest score to the highest', () => {
+    for (const board of startGame('SORTED').boards) {
+      const scores = board.subtasks.map((item) => item.maxScore)
+      expect(scores).toEqual([...scores].sort((left, right) => left - right))
+      expect(scores.at(-1)).toBe(100)
+      expect(board.subtasks.at(-1)).toMatchObject(
+        board.label.endsWith('T1') ? { rows: 2, cols: 2 } : { rows: 3, cols: 3 },
+      )
+    }
+  })
+
+  it('still spawns the 1x1 unit subtask once the key is score sorted', () => {
+    const state = startGame('SPAWN-UNIT')
+    for (const board of state.boards) {
+      expect(board.pieces).toHaveLength(2)
+      for (const item of board.pieces) {
+        const subtask = board.subtasks.find(
+          (candidate) => item.kind === 'verdict' && candidate.id === item.subtaskId,
+        )!
+        expect(subtask).toMatchObject({ rows: 1, cols: 1 })
+      }
+    }
+  })
+
+  it('labels the six problems D1T1 through D2T3', () => {
+    expect(startGame('LABELS').boards.map((board) => board.label)).toEqual([
+      'D1T1',
+      'D1T2',
+      'D1T3',
+      'D2T1',
+      'D2T2',
+      'D2T3',
+    ])
+  })
+
+  it('rebuilds an identical game from its seed and recorded actions', () => {
+    let state = startGame('REPLAY-SAVE')
+    for (const direction of ['left', 'down', 'right', 'up', 'left', 'up'] as const) {
+      state = finishAnimation(moveBoard(state, direction))
+    }
+    state = finishAnimation(submitBoard(state, state.boards[2].id))
+    state = finishAnimation(moveBoard(state, 'right'))
+
+    expect(replayGame(state.seed, state.history)).toEqual(state)
+  })
+
+  it('records every accepted action and ignores rejected ones', () => {
+    // One block already flush against the left wall: moving left is a no-op.
+    let state = isolatedState([piece('single-50', 0, 0, 0)])
+    expect(state.history).toEqual([])
+
+    expect(moveBoard(state, 'left').history).toEqual([])
+
+    state = finishAnimation(moveBoard(state, 'right'))
+    expect(state.history).toEqual([{ type: 'move', direction: 'right' }])
+
+    const boardId = state.boards[0].id
+    state = finishAnimation(submitBoard(state, boardId))
+    expect(state.history.at(-1)).toEqual({ type: 'submit', boardId })
+    // Submitting an already submitted problem is rejected, so nothing is logged.
+    expect(submitBoard(state, boardId).history).toEqual(state.history)
   })
 
   it('keeps all generated and moved pieces in bounds without overlap', () => {

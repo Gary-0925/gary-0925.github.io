@@ -1,6 +1,7 @@
 import { useRef, type CSSProperties, type PointerEvent } from 'react'
 import { BOARD_SIZE, VERDICTS } from '../data/verdicts'
 import { pieceScore } from '../game/engine'
+import { formatScore } from '../game/score'
 import type { BoardPiece, Direction, GameState, ProblemBoard } from '../game/types'
 
 interface GameBoardProps {
@@ -11,10 +12,6 @@ interface GameBoardProps {
 
 interface Point { x: number; y: number }
 interface DisplayPiece { piece: BoardPiece; ghost: boolean }
-
-function formatScore(score: number) {
-  return Number.isInteger(score) ? String(score) : score.toFixed(1)
-}
 
 function piecePositionStyle(piece: BoardPiece, rows: number, cols: number) {
   const unit = 100 / BOARD_SIZE
@@ -67,7 +64,7 @@ function ProblemBoardView({
   return (
     <section className={`problem-board status-${board.status}`}>
       <header>
-        <b>题目 {board.label}</b>
+        <b>{board.label}</b>
         <div>
           <span>{formatScore(board.submittedScore ?? board.currentScore)} 分</span>
           <button
@@ -79,11 +76,15 @@ function ProblemBoardView({
           </button>
         </div>
       </header>
-      <div className="subtask-key" aria-label={`${board.label} 题子任务`}>
+      <div className="subtask-key" aria-label={`${board.label} 子任务，按分值排序`}>
         {board.subtasks.map((subtask) => (
-          <span key={subtask.id} title={`${subtask.rows}×${subtask.cols}，${subtask.maxScore} 分`}>
-            <i style={{ width: `${subtask.cols * 4 + 2}px`, height: `${subtask.rows * 4 + 2}px` }} />
+          <span
+            key={subtask.id}
+            title={`${subtask.rows}×${subtask.cols} 子任务，满分 ${subtask.maxScore}`}
+            aria-label={`${subtask.rows}乘${subtask.cols}，${subtask.maxScore} 分`}
+          >
             <b>{subtask.maxScore}</b>
+            <i>{subtask.rows}×{subtask.cols}</i>
           </span>
         ))}
       </div>
@@ -92,7 +93,7 @@ function ProblemBoardView({
         onPointerDown={pointerDown}
         onPointerUp={pointerUp}
         role="group"
-        aria-label={`Problem ${board.label}，当前最高 ${formatScore(board.currentScore)} 分`}
+        aria-label={`${board.label}，当前最高 ${formatScore(board.currentScore)} 分`}
       >
         <div className="board-cells" aria-hidden="true">
           {Array.from({ length: BOARD_SIZE * BOARD_SIZE }, (_, index) => <span key={index} />)}
@@ -140,7 +141,7 @@ function ProblemBoardView({
         })}
         {board.status === 'submitted' && (
           <div className="board-result">
-            <strong>{board.autoSubmitted ? '自动提交' : '已提交'}</strong>
+            <strong>已提交</strong>
             <span>{formatScore(board.submittedScore ?? 0)} 分</span>
           </div>
         )}
