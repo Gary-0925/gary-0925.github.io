@@ -44,6 +44,12 @@ $defaults = [
 
     // 排行榜单页最多返回多少条。
     'max_page_size' => 100,
+
+    // 笔试分。库里存的是上机分，展示时统一加上这个数（满分 600 + 105 = 705）。
+    'written_exam_score' => 105,
+
+    // 排行榜只统计最近多少天的成绩，奖牌线也按这个窗口内的人数算。
+    'leaderboard_days' => 7,
 ];
 
 $localFile = __DIR__ . '/config.local.php';

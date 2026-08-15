@@ -298,14 +298,18 @@ function aknoi_unit_subtask(array $board): array
     throw new RuntimeException('棋盘缺少 1x1 子任务。');
 }
 
+/**
+ * 100 分的那档。按分数找而不是按形状找：
+ * T1 的 100 分是 2x2，其余题是 3x3。
+ */
 function aknoi_jackpot_subtask(array $board): array
 {
     foreach ($board['subtasks'] as $subtask) {
-        if ($subtask['rows'] === 3 && $subtask['cols'] === 3) {
+        if ((int) $subtask['maxScore'] === 100) {
             return $subtask;
         }
     }
-    throw new RuntimeException('棋盘缺少 3x3 子任务。');
+    throw new RuntimeException('棋盘缺少 100 分子任务。');
 }
 
 /* ------------------------------------------------------------------ */
@@ -386,15 +390,32 @@ function aknoi_spawn_piece(array &$board, array &$context, ?array $forcedSubtask
     return null;
 }
 
-function aknoi_generate_subtasks(string $boardId, array &$context): array
+/** 两天的 T1 都是签到题：只有三档分，且 100 分那档是 2x2。 */
+function aknoi_is_easy_problem(string $label): bool
 {
-    $generatedShapes = array_slice(aknoi_shuffle(aknoi_generated_shapes(), $context), 0, 3);
-    $scores = array_slice(aknoi_shuffle(AKNOI_SUBTASK_SCORES, $context), 0, 4);
+    return substr($label, -2) === 'T1';
+}
+
+function aknoi_generate_subtasks(string $boardId, array &$context, bool $easy): array
+{
+    // 先把 jackpot 形状从池子里剔掉，中间档就不可能和它重复。
+    $jackpotShape = $easy ? ['rows' => 2, 'cols' => 2] : ['rows' => 3, 'cols' => 3];
+    $pool = [];
+    foreach (aknoi_generated_shapes() as $shape) {
+        if ($shape['rows'] === $jackpotShape['rows'] && $shape['cols'] === $jackpotShape['cols']) {
+            continue;
+        }
+        $pool[] = $shape;
+    }
+
+    $middleCount = $easy ? 1 : 3;
+    $generatedShapes = array_slice(aknoi_shuffle($pool, $context), 0, $middleCount);
+    $scores = array_slice(aknoi_shuffle(AKNOI_SUBTASK_SCORES, $context), 0, $middleCount + 1);
 
     $shapes = array_merge(
         [['rows' => 1, 'cols' => 1]],
         $generatedShapes,
-        [['rows' => 3, 'cols' => 3]]
+        [$jackpotShape]
     );
 
     $subtasks = [];
@@ -421,7 +442,7 @@ function aknoi_create_board(string $label, array &$context): array
         'id' => $id,
         'label' => $label,
         'status' => 'active',
-        'subtasks' => aknoi_generate_subtasks($id, $context),
+        'subtasks' => aknoi_generate_subtasks($id, $context, aknoi_is_easy_problem($label)),
         'pieces' => [],
         'currentScore' => 0.0,
         'submittedScore' => null,

@@ -81,16 +81,36 @@ describe('AKNOI seeded engine', () => {
     expect(state.boards.some((board) => board.pieces.some((item) => item.kind === 'o2'))).toBe(true)
   })
 
-  it('generates unique subtask shapes and a 3x3 100-point subtask per problem', () => {
+  it('generates unique subtask shapes and a 100-point jackpot per problem', () => {
     const state = startGame('SUBTASKS')
     for (const board of state.boards) {
-      expect(board.subtasks).toHaveLength(5)
+      // T1 is the easy problem on both days: three tiers with a 2x2 jackpot.
+      const easy = board.label.endsWith('T1')
+      expect(board.subtasks).toHaveLength(easy ? 3 : 5)
       const shapes = board.subtasks.map((item) => `${item.rows}x${item.cols}`)
-      expect(new Set(shapes).size).toBe(5)
-      expect(board.subtasks).toContainEqual(expect.objectContaining({ rows: 3, cols: 3, maxScore: 100 }))
+      expect(new Set(shapes).size).toBe(easy ? 3 : 5)
+      expect(board.subtasks).toContainEqual(
+        expect.objectContaining(
+          easy ? { rows: 2, cols: 2, maxScore: 100 } : { rows: 3, cols: 3, maxScore: 100 },
+        ),
+      )
+      expect(board.subtasks).toContainEqual(expect.objectContaining({ rows: 1, cols: 1 }))
     }
     const scoreSets = state.boards.map((board) => board.subtasks.map((item) => item.maxScore).join(','))
     expect(new Set(scoreSets).size).toBeGreaterThan(1)
+  })
+
+  it('gives both T1 problems three tiers and the harder problems five', () => {
+    const state = startGame('TIERS')
+    const byLabel = Object.fromEntries(state.boards.map((board) => [board.label, board]))
+    expect(byLabel['D1T1'].subtasks).toHaveLength(3)
+    expect(byLabel['D2T1'].subtasks).toHaveLength(3)
+    for (const label of ['D1T2', 'D1T3', 'D2T2', 'D2T3']) {
+      expect(byLabel[label].subtasks, label).toHaveLength(5)
+    }
+    for (const label of ['D1T1', 'D2T1']) {
+      expect(byLabel[label].subtasks.at(-1), label).toMatchObject({ rows: 2, cols: 2, maxScore: 100 })
+    }
   })
 
   it('uses the requested verdict score multipliers', () => {
@@ -288,7 +308,9 @@ describe('AKNOI seeded engine', () => {
       const scores = board.subtasks.map((item) => item.maxScore)
       expect(scores).toEqual([...scores].sort((left, right) => left - right))
       expect(scores.at(-1)).toBe(100)
-      expect(board.subtasks.at(-1)).toMatchObject({ rows: 3, cols: 3 })
+      expect(board.subtasks.at(-1)).toMatchObject(
+        board.label.endsWith('T1') ? { rows: 2, cols: 2 } : { rows: 3, cols: 3 },
+      )
     }
   })
 

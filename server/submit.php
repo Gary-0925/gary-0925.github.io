@@ -108,18 +108,31 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 ]
             );
 
+            // 名次和奖牌都按排行榜同一个时间窗口算，否则页面上会对不上。
+            // INTERVAL 不能用占位符，$days 来自配置且已 clamp。
+            $days = leaderboard_days();
+            $recentSql = 'created_at >= (NOW() - INTERVAL ' . $days . ' DAY)';
+
             $rankRow = $db->query(
-                'SELECT COUNT(*) + 1 AS rank_value FROM `' . $table . '` WHERE score > ?',
+                'SELECT COUNT(*) + 1 AS rank_value FROM `' . $table . '`'
+                . ' WHERE ' . $recentSql . ' AND score > ?',
                 [$score]
             )->fetch();
 
+            $totalRow = $db->query(
+                'SELECT COUNT(*) AS total FROM `' . $table . '` WHERE ' . $recentSql
+            )->fetch();
+
+            $rank = (int) ($rankRow['rank_value'] ?? 0);
             $result = [
                 'name' => $name,
                 'seed' => $replay['seed'],
                 'score' => $score,
                 'moves' => (int) $verified['moves'],
                 'boards' => $verified['boards'],
-                'rank' => (int) ($rankRow['rank_value'] ?? 0),
+                'rank' => $rank,
+                'days' => $days,
+                'medal' => medal_for_rank($rank, medal_cutoffs((int) ($totalRow['total'] ?? 0))),
             ];
             $message = ['ok', '上传成功，分数已通过服务端重算校验。'];
         }
@@ -149,9 +162,16 @@ ob_start();
   <table>
     <tr><th>选手</th><td><?= e($result['name']) ?></td></tr>
     <tr><th>种子</th><td><code><?= e($result['seed']) ?></code></td></tr>
-    <tr><th>总分</th><td><strong><?= format_score($result['score']) ?></strong> / 600</td></tr>
+    <?php $bonus = (int) cfg('written_exam_score', 105); ?>
+    <?php $fullMark = format_score((float) cfg('max_score', 600.0) + (float) $bonus); ?>
+    <tr><th>总分</th><td><strong><?= format_display_score((float) $result['score']) ?></strong> / <?= $fullMark ?>
+      <span class="note">（上机 <?= format_score((float) $result['score']) ?> + 笔试 <?= $bonus ?>）</span></td></tr>
     <tr><th>步数</th><td><?= (int) $result['moves'] ?></td></tr>
-    <tr><th>当前排名</th><td>第 <?= (int) $result['rank'] ?> 名</td></tr>
+    <tr><th>当前排名</th><td>第 <?= (int) $result['rank'] ?> 名
+      <span class="note">（最近 <?= (int) $result['days'] ?> 天）</span>
+      <?php if (!empty($result['medal'])): ?>
+      <span class="medal <?= e($result['medal']['key']) ?>"><?= e($result['medal']['short']) ?></span>
+      <?php endif; ?></td></tr>
   </table>
   <h2>各题得分</h2>
   <table>
@@ -166,7 +186,7 @@ ob_start();
       <?php endforeach; ?>
     </tr>
   </table>
-  <p class="note" style="margin-bottom:0"><a href="leaderboard.php">查看排行榜 →</a></p>
+  <p class="note" style="margin-bottom:0"><a href="./">查看排行榜 →</a></p>
 </div>
 <?php endif; ?>
 
@@ -190,7 +210,7 @@ ob_start();
     <li>只有六道题全部提交、这一局真正打完了才能上榜。</li>
     <li>同一局（相同种子 + 相同操作）只会记录一次。</li>
   </ol>
-  <p class="note" style="margin-bottom:0"><a href="leaderboard.php">排行榜</a></p>
+  <p class="note" style="margin-bottom:0"><a href="./">排行榜</a></p>
 </div>
 <?php
 render_page('上传成绩', (string) ob_get_clean());

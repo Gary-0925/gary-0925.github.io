@@ -1,7 +1,7 @@
 /**
  * Differential test: the PHP port of the engine must produce exactly the same
  * score as the TypeScript engine, otherwise honest players get flagged as
- * cheaters (or cheaters slip through) by api/verify.php.
+ * cheaters (or cheaters slip through) by the server side re-scoring.
  *
  * This boots a real PHP 8.3 runtime through php-wasm and replays the same
  * random games on both sides.
@@ -14,7 +14,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { finishAnimation, moveBoard, replayGame, startGame, submitBoard } from './engine'
 import type { Direction, GameAction, GameState } from './types'
 
-const ENGINE_PHP = fileURLToPath(new URL('../../api/engine.php', import.meta.url))
+const ENGINE_PHP = fileURLToPath(new URL('../../server/engine.php', import.meta.url))
 
 let php: PHP
 

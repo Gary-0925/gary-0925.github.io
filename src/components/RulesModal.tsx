@@ -14,8 +14,8 @@ export function RulesModal({ onClose }: RulesModalProps) {
           <li><b>移动：</b>一次操作控制所有未提交题目（D1T1–D2T3）；前方块先落位，后方块再依次碰撞。</li>
           <li><b>合并：</b>Verdict 相同且前方块完整覆盖移动块截面时升级；前方块保留子任务。</li>
           <li><b>O2：</b>1×1 的 O2 块撞入普通目标时直接使其 Verdict 升一级；AC 无法再优化。</li>
-          <li><b>子任务：</b>每种形状对应一个分值，题头按分值从低到高排列；100 分子任务固定为 3×3。</li>
-          <li><b>计分：</b>块分数 = 子任务分值 × Verdict 系数；每题取区域内块的当前最高分。</li>
+          <li><b>子任务：</b>每种形状对应一个分值，题头按分值从低到高排列；100 分子任务在 D1T1、D2T1 是 2×2，其余四题是 3×3。</li>
+          <li><b>计分：</b>块分数 = 子任务分值 × Verdict 系数；每题取区域内块的当前最高分。总分 = 六题之和 + 笔试 105 分，满分 705。</li>
           <li><b>提交：</b>只能手动提交；提交后锁定当时分数并退出操作，六题全部提交即结束。</li>
         </ol>
         <div className="direction-demo"><ArrowUp /><ArrowDown /><ArrowLeft /><ArrowRight /><span>方向键、WASD、按钮或滑动</span></div>

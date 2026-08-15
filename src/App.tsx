@@ -26,10 +26,7 @@ import {
   writeBestScore,
 } from './game/storage'
 import type { Direction, GameState } from './game/types'
-
-function formatScore(score: number) {
-  return Number.isInteger(score) ? String(score) : score.toFixed(1)
-}
+import { MAX_MACHINE_SCORE, formatTotalScore } from './game/score'
 
 function freshSeed() {
   try {
@@ -81,7 +78,7 @@ function isTypingTarget(target: EventTarget | null) {
 function soundForState(previous: GameState, next: GameState) {
   if (next === previous || next.eventId === previous.eventId) return
   if (next.lastEvent === 'merge') playSound('chain')
-  else if (next.lastEvent === 'finish' && next.contestScore === 600) playSound('win')
+  else if (next.lastEvent === 'finish' && next.contestScore === MAX_MACHINE_SCORE) playSound('win')
   else playSound('paper')
 }
 
@@ -199,8 +196,8 @@ export default function App() {
             <p>六题同步评测</p>
           </div>
           <div className="score-group">
-            <div><span>总分</span><strong>{formatScore(state.contestScore)}</strong></div>
-            <div><span>纪录</span><strong>{formatScore(bestScore)}</strong></div>
+            <div><span>总分</span><strong>{formatTotalScore(state.contestScore)}</strong></div>
+            <div><span>纪录</span><strong>{formatTotalScore(bestScore)}</strong></div>
           </div>
         </header>
 

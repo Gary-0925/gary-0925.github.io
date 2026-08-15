@@ -1,6 +1,6 @@
 <?php
 /**
- * 把这个文件复制成 api/config.local.php，填上自己的随机串。
+ * 把这个文件复制成 config.local.php，填上自己的随机串。
  * config.local.php 已经在 .gitignore 里，不会被提交。
  *
  * 生成随机串（任选其一）：

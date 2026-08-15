@@ -2,8 +2,8 @@
 /**
  * 一次性建表脚本。
  *
- * 用法：先在 api/config.local.php 里设置 install_token，然后浏览器访问
- *   https://aknoi.page.gd/api/install.php?token=你的令牌
+ * 用法：先在 config.local.php 里设置 install_token，然后浏览器访问
+ *   https://aknoi.page.gd/install.php?token=你的令牌
  * 建完表后建议直接删掉这个文件。
  */
 
@@ -18,7 +18,7 @@ $given = isset($_GET['token']) ? (string) $_GET['token'] : '';
 
 if ($expected === '') {
     http_response_code(403);
-    echo "install_token 尚未配置。请先在 api/config.local.php 里设置一个随机令牌。\n";
+    echo "install_token 尚未配置。请先在 config.local.php 里设置一个随机令牌。\n";
     exit;
 }
 
@@ -47,13 +47,25 @@ CREATE TABLE IF NOT EXISTS `{$table}` (
     KEY idx_board (score DESC, moves ASC, id ASC),
     KEY idx_seed (seed, score DESC),
     KEY idx_name (name, score DESC),
-    KEY idx_rate (ip_hash, created_at)
+    KEY idx_rate (ip_hash, created_at),
+    KEY idx_recent (created_at, score DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL;
 
 try {
     $db->query($sql);
     echo "表 `{$table}` 已就绪。\n\n";
+
+    // 排行榜改成只看近一周之后需要这个索引。老库是 CREATE TABLE IF NOT EXISTS
+    // 建的，不会自动补，这里检查一下缺就加。
+    $hasRecent = $db->query(
+        'SHOW INDEX FROM `' . $table . '` WHERE Key_name = ?',
+        ['idx_recent']
+    )->fetch();
+    if (!$hasRecent) {
+        $db->query('ALTER TABLE `' . $table . '` ADD KEY idx_recent (created_at, score DESC)');
+        echo "已补建索引 idx_recent。\n\n";
+    }
 
     $rows = $db->query('DESCRIBE `' . $table . '`')->fetchAll();
     foreach ($rows as $row) {

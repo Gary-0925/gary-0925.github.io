@@ -9,7 +9,23 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../db/db.php';
+// 这些文件部署在站点根目录（htdocs/），数据库连接在 htdocs/db/db.php。
+// 为了在本地把它们放进子目录时也能跑，父目录的 db/ 也认。
+$aknoiDbCandidates = [__DIR__ . '/db/db.php', __DIR__ . '/../db/db.php'];
+$aknoiDbLoaded = false;
+foreach ($aknoiDbCandidates as $aknoiDbFile) {
+    if (is_file($aknoiDbFile)) {
+        require_once $aknoiDbFile;
+        $aknoiDbLoaded = true;
+        break;
+    }
+}
+if (!$aknoiDbLoaded) {
+    http_response_code(500);
+    exit('找不到数据库连接文件 db/db.php。');
+}
+unset($aknoiDbCandidates, $aknoiDbFile, $aknoiDbLoaded);
+
 require_once __DIR__ . '/engine.php';
 
 /** @var array<string,mixed> $AKNOI_CONFIG */
@@ -49,6 +65,77 @@ function format_score(float $score): string
     return abs($score - round($score)) < 0.0001
         ? (string) (int) round($score)
         : number_format($score, 1, '.', '');
+}
+
+/**
+ * 上机分 → 对外展示的总分。
+ *
+ * 库里存的一律是引擎算出来的上机分（0~600），笔试分只在显示时加上，
+ * 这样引擎、存档、校验三边的口径始终一致。
+ */
+function display_score(float $machineScore): float
+{
+    return round($machineScore + (float) cfg('written_exam_score', 105), 1);
+}
+
+/** 展示用总分的字符串形式。 */
+function format_display_score(float $machineScore): string
+{
+    return format_score(display_score($machineScore));
+}
+
+/**
+ * 奖牌分数线。
+ *
+ * $total 是本周上榜的总人数，名次落在各段内即得对应奖牌：
+ *   金 前 min(50,  ceil(total * 1/10))
+ *   银 到 min(150, ceil(total * 3/10))
+ *   铜 到 min(300, ceil(total * 6/10))
+ *
+ * 三条线单调不减：人少的时候上界会互相压平（比如 total=1 时三条线都是 1，
+ * 只发金牌），所以后面判定时按金→银→铜的顺序取第一个命中的即可。
+ *
+ * @return array{gold:int,silver:int,bronze:int}
+ */
+function medal_cutoffs(int $total): array
+{
+    if ($total <= 0) {
+        return ['gold' => 0, 'silver' => 0, 'bronze' => 0];
+    }
+    $gold = min(50, (int) ceil($total / 10));
+    $silver = max($gold, min(150, (int) ceil($total * 3 / 10)));
+    $bronze = max($silver, min(300, (int) ceil($total * 6 / 10)));
+    return ['gold' => $gold, 'silver' => $silver, 'bronze' => $bronze];
+}
+
+/**
+ * 名次 → 奖牌。返回 null 表示无奖牌。
+ *
+ * @param array{gold:int,silver:int,bronze:int} $cutoffs
+ * @return array{key:string,label:string,short:string}|null
+ */
+function medal_for_rank(int $rank, array $cutoffs): ?array
+{
+    if ($rank <= 0) {
+        return null;
+    }
+    if ($rank <= $cutoffs['gold']) {
+        return ['key' => 'au', 'label' => '金牌', 'short' => 'Au'];
+    }
+    if ($rank <= $cutoffs['silver']) {
+        return ['key' => 'ag', 'label' => '银牌', 'short' => 'Ag'];
+    }
+    if ($rank <= $cutoffs['bronze']) {
+        return ['key' => 'cu', 'label' => '铜牌', 'short' => 'Cu'];
+    }
+    return null;
+}
+
+/** 排行榜统计窗口（天）。只有这个窗口内的成绩会上榜。 */
+function leaderboard_days(): int
+{
+    $days = (int) cfg('leaderboard_days', 7);
+    return $days > 0 ? min($days, 3650) : 7;
 }
 
 /** 取真实客户端 IP。免费主机前面有反向代理，优先读代理头。 */
@@ -286,6 +373,12 @@ td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .note { color:var(--muted); font-size:.78rem; }
 .empty { color:var(--muted); text-align:center; padding:28px 0; }
 .pager { margin-top:14px; font-size:.82rem; }
+.medal-col { width:52px; }
+.medal { display:inline-block; min-width:26px; padding:1px 6px; border-radius:10px;
+  font-size:.72rem; font-weight:700; text-align:center; letter-spacing:.02em; }
+.medal.au { background:#f6e2a8; border:1px solid #d9b64e; color:#6d5310; }
+.medal.ag { background:#e6e6e6; border:1px solid #b6b6b6; color:#4f4f4f; }
+.medal.cu { background:#f0d9c4; border:1px solid #c69267; color:#6f4522; }
 ol { padding-left:1.2em; }
 code { background:#f2ede6; padding:1px 5px; border-radius:3px; font-size:.85em; }
 </style>

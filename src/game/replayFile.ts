@@ -1,3 +1,4 @@
+import { formatTotalScore } from './score'
 import type { GameAction, GameState } from './types'
 
 export const REPLAY_FILE_VERSION = 1
@@ -12,7 +13,11 @@ export interface ReplayFile {
   format: 'aknoi-replay'
   version: number
   seed: string
-  /** Claimed score. The server recomputes it and rejects mismatches. */
+  /**
+   * Claimed score, machine part only (0-600, no written exam bonus). The
+   * server replays the actions and rejects mismatches, so this must stay on
+   * the same scale the engine produces.
+   */
   score: number
   moves: number
   finished: boolean
@@ -33,13 +38,14 @@ export function buildReplayFile(state: GameState): ReplayFile {
   }
 }
 
-/** `AKNOI-<seed>-<score>.dat`, with anything filesystem hostile stripped out. */
+/**
+ * `AKNOI-<seed>-<score>.dat`, with anything filesystem hostile stripped out.
+ * The name shows the score a human sees, i.e. including the written exam
+ * bonus; the score stored inside the file stays on the engine scale.
+ */
 export function replayFileName(state: GameState) {
   const seed = state.seed.replace(/[^A-Za-z0-9_-]/g, '') || 'SEED'
-  const score = Number.isInteger(state.contestScore)
-    ? String(state.contestScore)
-    : state.contestScore.toFixed(1)
-  return `AKNOI-${seed}-${score}.dat`
+  return `AKNOI-${seed}-${formatTotalScore(state.contestScore)}.dat`
 }
 
 export function serializeReplay(state: GameState) {

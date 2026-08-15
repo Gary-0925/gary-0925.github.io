@@ -4,6 +4,11 @@ import {
   GENERATED_SHAPES,
   VERDICTS,
 } from '../data/verdicts'
+import {
+  MAX_MACHINE_SCORE,
+  MAX_TOTAL_SCORE,
+  formatTotalScore,
+} from './score'
 import type {
   BoardPiece,
   Direction,
@@ -229,14 +234,26 @@ function spawnPiece(
   return undefined
 }
 
-function generateSubtasks(boardId: string, context: RandomContext) {
-  const generatedShapes = shuffle(GENERATED_SHAPES, context).slice(0, 3)
-  const scores = shuffle(SUBTASK_SCORES, context).slice(0, 4)
-  const shapes = [
-    { rows: 1, cols: 1 },
-    ...generatedShapes,
-    { rows: 3, cols: 3 },
-  ]
+/** T1 on either day is the easy problem: three tiers, and its 100 is a 2x2. */
+export function isEasyProblem(label: string) {
+  return label.endsWith('T1')
+}
+
+function generateSubtasks(
+  boardId: string,
+  context: RandomContext,
+  easy: boolean,
+) {
+  // The jackpot shape is excluded from the pool so the middle tiers can never
+  // duplicate it.
+  const jackpotShape = easy ? { rows: 2, cols: 2 } : { rows: 3, cols: 3 }
+  const pool = GENERATED_SHAPES.filter(
+    (shape) => !(shape.rows === jackpotShape.rows && shape.cols === jackpotShape.cols),
+  )
+  const middleCount = easy ? 1 : 3
+  const generatedShapes = shuffle(pool, context).slice(0, middleCount)
+  const scores = shuffle(SUBTASK_SCORES, context).slice(0, middleCount + 1)
+  const shapes = [{ rows: 1, cols: 1 }, ...generatedShapes, jackpotShape]
   const subtasks = shapes.map((shape, index): SubtaskDefinition => ({
     id: `${boardId}-subtask-${index + 1}`,
     rows: shape.rows,
@@ -247,14 +264,15 @@ function generateSubtasks(boardId: string, context: RandomContext) {
   return subtasks.sort((left, right) => left.maxScore - right.maxScore)
 }
 
-// The 1x1 subtask is the spawn//fill unit and the 100 point 3x3 is the jackpot,
-// so both are looked up by shape rather than by position in the sorted array.
+// The 1x1 subtask is the spawn/fill unit and the 100 point one is the jackpot.
+// The jackpot is found by score because its shape differs between T1 and the
+// harder problems.
 function unitSubtask(board: ProblemBoard) {
   return board.subtasks.find((item) => item.rows === 1 && item.cols === 1)!
 }
 
 function jackpotSubtask(board: ProblemBoard) {
-  return board.subtasks.find((item) => item.rows === 3 && item.cols === 3)!
+  return board.subtasks.find((item) => item.maxScore === 100)!
 }
 
 function createBoard(label: string, context: RandomContext): ProblemBoard {
@@ -263,7 +281,7 @@ function createBoard(label: string, context: RandomContext): ProblemBoard {
     id,
     label,
     status: 'active',
-    subtasks: generateSubtasks(id, context),
+    subtasks: generateSubtasks(id, context, isEasyProblem(label)),
     pieces: [],
     currentScore: 0,
   }
@@ -455,7 +473,11 @@ function finishIfComplete(state: GameState) {
   if (!state.boards.every((board) => board.status === 'submitted')) return
   state.screen = 'finished'
   state.lastEvent = 'finish'
-  setMessage(state, `比赛结束：${state.contestScore} / 600。`, state.contestScore === 600 ? 'good' : 'warn')
+  setMessage(
+    state,
+    `比赛结束：${formatTotalScore(state.contestScore)} / ${MAX_TOTAL_SCORE}。`,
+    state.contestScore === MAX_MACHINE_SCORE ? 'good' : 'warn',
+  )
 }
 
 export function finishAnimation(current: GameState): GameState {
