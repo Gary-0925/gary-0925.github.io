@@ -1,35 +1,47 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
-  BrainCircuit,
-  Grip,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  Dices,
   HelpCircle,
-  MousePointerClick,
   RotateCcw,
-  Trophy,
   Volume2,
   VolumeX,
-  Zap,
 } from 'lucide-react'
-import { PROBLEM_QUEUES, VERDICTS } from './data/verdicts'
-import { playSound, setSoundEnabled } from './game/audio'
-import {
-  canPlaceCard,
-  createInitialState,
-  placeCard,
-  placeSelected,
-  selectCard,
-  startGame,
-  turnsUntilHack,
-} from './game/engine'
-import type { GameState } from './game/types'
-import { CoverScreen } from './components/CoverScreen'
+import { VERDICTS } from './data/verdicts'
 import { EndOverlay } from './components/EndOverlay'
-import { JudgeCardView } from './components/JudgeCardView'
-import { QueueColumn } from './components/QueueColumn'
+import { GameBoard } from './components/GameBoard'
 import { RulesModal } from './components/RulesModal'
-import { SpecialGuide } from './components/SpecialGuide'
+import { playSound, setSoundEnabled } from './game/audio'
+import { finishAnimation, moveBoard, startGame, submitBoard } from './game/engine'
+import type { Direction, GameState } from './game/types'
 
-const BEST_SCORE_KEY = 'judge-queue-best-score'
+const BEST_SCORE_KEY = 'aknoi-best-score'
+
+function formatScore(score: number) {
+  return Number.isInteger(score) ? String(score) : score.toFixed(1)
+}
+
+function freshSeed() {
+  try {
+    const value = new Uint32Array(1)
+    crypto.getRandomValues(value)
+    return value[0].toString(36).toUpperCase().padStart(7, '0')
+  } catch {
+    return Date.now().toString(36).toUpperCase()
+  }
+}
+
+function initialSeed() {
+  try {
+    const fromHash = decodeURIComponent(window.location.hash.slice(1)).trim()
+    return fromHash || freshSeed()
+  } catch {
+    return freshSeed()
+  }
+}
 
 function readBestScore() {
   try {
@@ -42,18 +54,23 @@ function readBestScore() {
 function soundForState(previous: GameState, next: GameState) {
   if (next === previous || next.eventId === previous.eventId) return
   if (next.lastEvent === 'merge') playSound('chain')
-  else if (next.lastEvent === 'ac') playSound('win')
-  else if (next.lastEvent === 'hack' || next.lastEvent === 'afo') playSound('enemy')
-  else if (next.lastEvent === 'special') playSound('ink')
+  else if (next.lastEvent === 'finish' && next.contestScore === 600) playSound('win')
   else playSound('paper')
 }
 
+const DIRECTIONS: Array<{ direction: Direction; icon: typeof ArrowUp; label: string }> = [
+  { direction: 'left', icon: ArrowLeft, label: '左' },
+  { direction: 'up', icon: ArrowUp, label: '上' },
+  { direction: 'down', icon: ArrowDown, label: '下' },
+  { direction: 'right', icon: ArrowRight, label: '右' },
+]
+
 export default function App() {
-  const [state, setState] = useState<GameState>(createInitialState)
+  const [state, setState] = useState<GameState>(() => startGame(initialSeed()))
+  const [seedInput, setSeedInput] = useState(() => state.seed)
   const [showRules, setShowRules] = useState(false)
   const [soundEnabled, setSound] = useState(true)
   const [bestScore, setBestScore] = useState(readBestScore)
-  const [draggingId, setDraggingId] = useState<string>()
 
   const apply = useCallback((action: (current: GameState) => GameState) => {
     setState((current) => {
@@ -63,51 +80,43 @@ export default function App() {
     })
   }, [])
 
-  const begin = useCallback(() => {
+  const loadSeed = useCallback((seed: string) => {
+    const next = startGame(seed)
+    setState(next)
+    setSeedInput(next.seed)
+    window.location.hash = encodeURIComponent(next.seed)
     playSound('paper')
-    setDraggingId(undefined)
-    setState(startGame())
   }, [])
 
-  useEffect(() => {
-    setSoundEnabled(soundEnabled)
-  }, [soundEnabled])
+  const submitSeed = (event: FormEvent) => {
+    event.preventDefault()
+    loadSeed(seedInput)
+  }
 
-  useEffect(() => {
-    if (state.screen !== 'won' && state.screen !== 'lost') return
-    if (state.score <= bestScore) return
-    setBestScore(state.score)
-    try {
-      localStorage.setItem(BEST_SCORE_KEY, String(state.score))
-    } catch {
-      // A private browsing context may reject storage.
-    }
-  }, [state.screen, state.score, bestScore])
-
-  const selectedCard = useMemo(
-    () => state.hand.find((card) => card.uid === state.selectedId),
-    [state.hand, state.selectedId],
-  )
-  const draggingCard = useMemo(
-    () => state.hand.find((card) => card.uid === draggingId),
-    [state.hand, draggingId],
-  )
-  const activeCard = draggingCard ?? selectedCard
-
-  const submitCard = useCallback(
-    (cardUid: string, queueIndex: number) => {
-      apply((current) => placeCard(current, cardUid, queueIndex))
-      setDraggingId(undefined)
-    },
+  const move = useCallback(
+    (direction: Direction) => apply((current) => moveBoard(current, direction)),
     [apply],
   )
 
-  const placeInQueue = useCallback(
-    (index: number) => {
-      if (state.selectedId) apply((current) => placeSelected(current, index))
-    },
-    [apply, state.selectedId],
-  )
+  useEffect(() => setSoundEnabled(soundEnabled), [soundEnabled])
+
+  useEffect(() => {
+    if (state.motion.length === 0 && state.spawnedPieceIds.length === 0) return
+    const timer = window.setTimeout(() => {
+      setState((current) => finishAnimation(current))
+    }, 190)
+    return () => window.clearTimeout(timer)
+  }, [state.eventId, state.motion.length, state.spawnedPieceIds.length])
+
+  useEffect(() => {
+    if (state.screen !== 'finished' || state.contestScore <= bestScore) return
+    setBestScore(state.contestScore)
+    try {
+      localStorage.setItem(BEST_SCORE_KEY, String(state.contestScore))
+    } catch {
+      // Local records are optional.
+    }
+  }, [state.screen, state.contestScore, bestScore])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -115,170 +124,118 @@ export default function App() {
         if (event.key === 'Escape') setShowRules(false)
         return
       }
-      if (state.screen === 'cover' && event.key === 'Enter') {
-        begin()
-        return
-      }
       if (state.screen !== 'playing') return
-
-      const handIndex = ['1', '2', '3'].indexOf(event.key)
-      if (handIndex >= 0 && state.hand[handIndex]) {
-        apply((current) => selectCard(current, state.hand[handIndex].uid))
-        return
+      const keys: Record<string, Direction> = {
+        ArrowUp: 'up', w: 'up', W: 'up',
+        ArrowDown: 'down', s: 'down', S: 'down',
+        ArrowLeft: 'left', a: 'left', A: 'left',
+        ArrowRight: 'right', d: 'right', D: 'right',
       }
-      const queueIndex = ['q', 'w', 'e', 'r'].indexOf(event.key.toLowerCase())
-      if (queueIndex >= 0) {
+      const direction = keys[event.key]
+      if (direction) {
         event.preventDefault()
-        placeInQueue(queueIndex)
+        move(direction)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [apply, begin, placeInQueue, showRules, state.hand, state.screen])
-
-  if (state.screen === 'cover') {
-    return (
-      <div className="app paper-bg">
-        <CoverScreen bestScore={bestScore} onStart={begin} onRules={() => setShowRules(true)} />
-        {showRules && <RulesModal onClose={() => setShowRules(false)} />}
-      </div>
-    )
-  }
-
-  const hackIn = turnsUntilHack(state.round)
+  }, [move, showRules, state.screen])
 
   return (
-    <div className="app paper-bg">
-      <header className="topbar">
-        <div className="brand-lockup">
-          <span className="brand-bracket">{'{JQ}'}</span>
-          <div><strong>评测队列</strong><small>Judge Queue</small></div>
-        </div>
-        <div className="top-stats">
-          <div><span>得分</span><b>{state.score.toLocaleString()}</b></div>
-          <div><span>纪录</span><b>{bestScore.toLocaleString()}</b></div>
-          <div><span>轮次</span><b>#{state.round}</b></div>
-          <div className="ak-stat"><span>进度</span><b>{state.solvedCount}/4 AC</b></div>
-        </div>
-        <div className="top-actions">
-          <button className="icon-button" onClick={() => setShowRules(true)} aria-label="查看规则"><HelpCircle /></button>
-          <button className="icon-button" onClick={() => setSound((value) => !value)} aria-label={soundEnabled ? '关闭声音' : '开启声音'}>
-            {soundEnabled ? <Volume2 /> : <VolumeX />}
-          </button>
-          <button className="icon-button" onClick={begin} aria-label="重新开始"><RotateCcw /></button>
-        </div>
-      </header>
-
-      <main className="game-layout">
-        <section className="board-section" aria-label="四道题的评测队列">
-          <div className="board-heading">
-            <div>
-              <p className="eyebrow">SUBMISSION PIPELINE</p>
-              <h1>四题评测中</h1>
-            </div>
-            <div className={`judge-message ${state.messageTone}`} key={state.eventId}>
-              <span className="terminal-caret">›</span> {state.message}
-            </div>
+    <div className="app">
+      <main className="game-container">
+        <header className="game-header">
+          <div className="title-block">
+            <h1>AKNOI</h1>
+            <p>六题同步评测</p>
           </div>
+          <div className="score-group">
+            <div><span>总分</span><strong>{formatScore(state.contestScore)}</strong></div>
+            <div><span>纪录</span><strong>{formatScore(bestScore)}</strong></div>
+          </div>
+        </header>
 
-          <div className="queue-grid">
-            {state.queues.map((queue, index) => {
-              const valid = Boolean(activeCard && canPlaceCard(state, activeCard, index))
-              return (
-                <QueueColumn
-                  key={PROBLEM_QUEUES[index].number}
-                  queue={queue}
-                  index={index}
-                  active={Boolean(activeCard)}
-                  valid={valid}
-                  dragging={Boolean(draggingCard)}
-                  onClick={() => placeInQueue(index)}
-                  onDropCard={() => draggingCard && submitCard(draggingCard.uid, index)}
-                />
-              )
-            })}
+        <div className="game-intro">
+          <p>同时移动 · 当前最高分 · 随时提交</p>
+          <div className="game-actions">
+            <button onClick={() => loadSeed(state.seed)}><RotateCcw />重开</button>
+            <button onClick={() => setShowRules(true)}><HelpCircle />规则</button>
+            <button onClick={() => setSound((value) => !value)} aria-label={soundEnabled ? '关闭声音' : '开启声音'}>
+              {soundEnabled ? <Volume2 /> : <VolumeX />}
+            </button>
+          </div>
+        </div>
+
+        <details className="seed-panel">
+          <summary>种子 <code>{state.seed}</code></summary>
+          <form className="seed-control" onSubmit={submitSeed}>
+            <input
+              id="game-seed"
+              aria-label="游戏种子"
+              value={seedInput}
+              onChange={(event) => setSeedInput(event.target.value)}
+              maxLength={32}
+              spellCheck={false}
+            />
+            <button type="submit">载入</button>
+            <button type="button" onClick={() => loadSeed(freshSeed())}><Dices />新种子</button>
+          </form>
+        </details>
+
+        <div className={`status-line ${state.messageTone}`} key={state.eventId}>
+          {state.message}
+        </div>
+
+        <GameBoard
+          state={state}
+          onMove={move}
+          onSubmit={(boardId) => apply((current) => submitBoard(current, boardId))}
+        />
+
+        <div className="direction-controls" aria-label="移动方向">
+          {DIRECTIONS.map(({ direction, icon: Icon, label }) => (
+            <button
+              key={direction}
+              type="button"
+              onClick={() => move(direction)}
+              disabled={state.motion.length > 0 || state.screen !== 'playing'}
+              aria-label={`六题同时向${label}移动`}
+            >
+              <Icon />
+            </button>
+          ))}
+        </div>
+        <p className="play-note">方向键 / WASD / 在任意活动棋盘上滑动</p>
+
+        <section className="verdict-section">
+          <h2>评测结果</h2>
+          <div className="verdict-list verdict-formula">
+            {VERDICTS.map((verdict) => (
+              <span
+                key={verdict.id}
+                style={{
+                  '--verdict-color': verdict.color,
+                  '--verdict-ink': verdict.ink,
+                } as React.CSSProperties}
+              >
+                <b>{verdict.label}</b>
+                <small>{verdict.multiplier === 0 ? '0 分' : `× ${verdict.multiplier}`}</small>
+              </span>
+            ))}
+            <span style={{ '--verdict-color': '#34495e', '--verdict-ink': '#ffffff' } as React.CSSProperties}>
+              <b>O2</b><small>目标 +1</small>
+            </span>
           </div>
         </section>
 
-        <aside className="side-panel">
-          <section className="contest-card">
-            <div className="section-label"><span>本场目标</span><Trophy size={15} /></div>
-            <div className="problem-checklist">
-              {PROBLEM_QUEUES.map((problem, index) => (
-                <div className={state.queues[index].solved ? 'done' : ''} key={problem.number}>
-                  <span>{problem.number}</span>
-                  <strong>{problem.algorithm}</strong>
-                  <b>{state.queues[index].solved ? 'AC' : '—'}</b>
-                </div>
-              ))}
-            </div>
-            <div className={`hack-clock ${hackIn === 0 ? 'now' : ''}`}>
-              <Zap />
-              <span>{hackIn === 0 ? '本轮含 Hack 数据' : `距 Hack 还有 ${hackIn} 轮`}</span>
-            </div>
-          </section>
-
-          <SpecialGuide />
-
-          <section className="legend-section">
-            <div className="section-label"><span>Verdict 合并表</span><BrainCircuit size={15} /></div>
-            <div className="mini-legend">
-              {VERDICTS.map((verdict) => (
-                <div key={verdict.id} style={{ '--legend': verdict.color } as React.CSSProperties}>
-                  <b>{verdict.label}</b><span>{verdict.value}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        </aside>
+        <p className="how-to-play">
+          <b>计分：</b>块分数 = 子任务分值 × Verdict 系数；每题取当前最高，提交后锁定。
+        </p>
       </main>
 
-      <section className="hand-dock" aria-label="本轮手牌">
-        <div className="hand-copy">
-          <p className="eyebrow">WAITING · {state.hand.length}/3</p>
-          <h2>待提交</h2>
-          <span className="desktop-drag-hint"><Grip /> 可直接拖入队列</span>
-        </div>
-        <div className="hand-cards">
-          {state.hand.map((card, index) => (
-            <JudgeCardView
-              key={card.uid}
-              card={card}
-              index={index}
-              selected={state.selectedId === card.uid}
-              onClick={() => apply((current) => selectCard(current, card.uid))}
-              onDragStart={(event) => {
-                event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData('text/plain', card.uid)
-                setDraggingId(card.uid)
-              }}
-              onDragEnd={() => setDraggingId(undefined)}
-            />
-          ))}
-          {Array.from({ length: 3 - state.hand.length }, (_, index) => (
-            <div className="empty-hand-card" key={`empty-${index}`}>已处理</div>
-          ))}
-        </div>
-        <div className={`quick-submit ${selectedCard ? 'visible' : ''}`}>
-          <span><MousePointerClick /> {selectedCard ? '快速提交到' : '点选卡片后提交'}</span>
-          <div>
-            {PROBLEM_QUEUES.map((problem, index) => (
-              <button
-                key={problem.number}
-                type="button"
-                disabled={!selectedCard || !canPlaceCard(state, selectedCard, index)}
-                onClick={() => selectedCard && submitCard(selectedCard.uid, index)}
-              >
-                {problem.number}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
-      {(state.screen === 'won' || state.screen === 'lost') && (
-        <EndOverlay state={state} bestScore={Math.max(bestScore, state.score)} onRestart={begin} />
+      {state.screen === 'finished' && state.motion.length === 0 && (
+        <EndOverlay state={state} bestScore={Math.max(bestScore, state.contestScore)} onRestart={() => loadSeed(state.seed)} />
       )}
     </div>
   )

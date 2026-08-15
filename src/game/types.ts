@@ -1,38 +1,65 @@
-export type CardKind =
-  | 'verdict'
-  | 'o2'
-  | 'o3'
-  | 'hack'
-  | 'gdb'
-  | 'longLong'
-  | 'subtask'
-
-export type GameScreen = 'cover' | 'playing' | 'won' | 'lost'
+export type Direction = 'up' | 'down' | 'left' | 'right'
+export type BoardStatus = 'active' | 'submitted'
+export type GameScreen = 'playing' | 'finished'
 export type MessageTone = 'neutral' | 'good' | 'warn' | 'bad'
 
-export interface JudgeCard {
-  uid: string
-  kind: CardKind
-  rank?: number
+export interface SubtaskDefinition {
+  id: string
+  rows: number
+  cols: number
+  maxScore: number
 }
 
-export interface QueueState {
-  cards: JudgeCard[]
-  solved: boolean
+interface PiecePosition {
+  id: string
+  row: number
+  col: number
+}
+
+export interface VerdictPiece extends PiecePosition {
+  kind: 'verdict'
+  subtaskId: string
+  verdictLevel: number
+}
+
+export interface O2Piece extends PiecePosition {
+  kind: 'o2'
+}
+
+export type BoardPiece = VerdictPiece | O2Piece
+
+export interface ProblemBoard {
+  id: string
+  label: string
+  status: BoardStatus
+  subtasks: SubtaskDefinition[]
+  pieces: BoardPiece[]
+  currentScore: number
+  submittedScore?: number
+  autoSubmitted?: boolean
+}
+
+export interface PieceMotion {
+  boardId: string
+  piece: BoardPiece
+  toRow: number
+  toCol: number
+  removed: boolean
 }
 
 export interface GameState {
   screen: GameScreen
-  round: number
-  score: number
-  queues: QueueState[]
-  hand: JudgeCard[]
-  selectedId?: string
-  solvedCount: number
+  seed: string
+  rngState: number
+  nextId: number
+  boards: ProblemBoard[]
+  motion: PieceMotion[]
+  spawnedPieceIds: string[]
+  contestScore: number
+  moves: number
   mergeCount: number
-  maxRank: number
   message: string
   messageTone: MessageTone
   eventId: number
-  lastEvent: 'none' | 'place' | 'merge' | 'ac' | 'hack' | 'special' | 'afo'
+  lastEvent: 'none' | 'move' | 'merge' | 'submit' | 'finish'
 }

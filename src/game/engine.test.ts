@@ -1,125 +1,292 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_QUEUE_HEIGHT } from '../data/verdicts'
+import { VERDICTS } from '../data/verdicts'
 import {
-  canPlaceCard,
-  generateHand,
-  placeCard,
-  selectCard,
+  crossSectionFits,
+  finishAnimation,
+  moveBoard,
+  pieceScore,
+  piecesOverlap,
   startGame,
+  submitBoard,
 } from './engine'
-import type { GameState, JudgeCard } from './types'
+import type { BoardPiece, GameState, O2Piece, SubtaskDefinition, VerdictPiece } from './types'
 
-const fixedRandom = () => 0.2
-let testId = 0
+let id = 0
 
-function card(rank: number): JudgeCard {
-  testId += 1
-  return { uid: `test-${testId}`, kind: 'verdict', rank }
+const TEST_SUBTASKS: SubtaskDefinition[] = [
+  { id: 'single-50', rows: 1, cols: 1, maxScore: 50 },
+  { id: 'wide-30', rows: 1, cols: 2, maxScore: 30 },
+  { id: 'tall-60', rows: 2, cols: 1, maxScore: 60 },
+  { id: 'wide4-80', rows: 1, cols: 4, maxScore: 80 },
+  { id: 'full-100', rows: 3, cols: 3, maxScore: 100 },
+]
+
+function piece(
+  subtaskId: string,
+  verdictLevel: number,
+  row: number,
+  col: number,
+): VerdictPiece {
+  id += 1
+  return { kind: 'verdict', id: `test-piece-${id}`, subtaskId, verdictLevel, row, col }
 }
 
-function special(kind: Exclude<JudgeCard['kind'], 'verdict'>): JudgeCard {
-  testId += 1
-  return { uid: `test-${kind}-${testId}`, kind }
+function o2(row: number, col: number): O2Piece {
+  id += 1
+  return { kind: 'o2', id: `test-o2-${id}`, row, col }
 }
 
-function play(state: GameState, cardUid: string, queueIndex = 0, random = fixedRandom) {
-  return placeCard(state, cardUid, queueIndex, random)
+function isolatedState(pieces: BoardPiece[]): GameState {
+  const state = startGame('ENGINE-TEST')
+  state.boards.forEach((board, index) => {
+    board.subtasks = structuredClone(TEST_SUBTASKS)
+    board.pieces = index === 0 ? pieces : []
+    board.status = index === 0 ? 'active' : 'submitted'
+    board.currentScore = 0
+    board.submittedScore = index === 0 ? undefined : 0
+    board.autoSubmitted = false
+  })
+  state.motion = []
+  state.spawnedPieceIds = []
+  state.contestScore = 0
+  state.moves = 0
+  state.mergeCount = 0
+  return state
 }
 
-describe('Judge Queue engine', () => {
-  it('merges equal verdicts and supports a chain merge', () => {
-    let state = startGame(fixedRandom)
-    const [first, second, judging] = state.hand
+function activeBoard(state: GameState) {
+  return state.boards[0]
+}
 
-    state = play(state, first.uid)
-    state = play(state, second.uid)
-    expect(state.queues[0].cards.map((item) => item.rank)).toEqual([1])
-
-    state = play(state, judging.uid)
-    expect(state.queues[0].cards.map((item) => item.rank)).toEqual([2])
-    expect(state.mergeCount).toBe(2)
-    expect(state.round).toBe(2)
+describe('AKNOI seeded engine', () => {
+  it('generates identical games from the same seed', () => {
+    expect(startGame('SAME-SEED')).toEqual(startGame('SAME-SEED'))
+    expect(startGame('OTHER-SEED').boards).not.toEqual(startGame('SAME-SEED').boards)
   })
 
-  it('keeps click selection while also allowing direct card placement', () => {
-    const state = startGame(fixedRandom)
-    const selected = selectCard(state, state.hand[0].uid)
-    expect(selected.selectedId).toBe(state.hand[0].uid)
-
-    const placed = placeCard(selected, state.hand[0].uid, 1, fixedRandom)
-    expect(placed.queues[1].cards).toHaveLength(1)
-    expect(placed.selectedId).toBeUndefined()
+  it('uses the seed for all later random outcomes as well', () => {
+    let left = startGame('REPLAY-42')
+    let right = startGame('REPLAY-42')
+    for (const direction of ['left', 'down', 'right', 'up'] as const) {
+      left = finishAnimation(moveBoard(left, direction))
+      right = finishAnimation(moveBoard(right, direction))
+    }
+    expect(left).toEqual(right)
   })
 
-  it('allows a full queue only when a verdict immediately merges', () => {
-    const state = startGame(fixedRandom)
-    state.queues[0].cards = Array.from(
-      { length: MAX_QUEUE_HEIGHT },
-      (_, rank) => card(rank),
-    )
-    const topRank = MAX_QUEUE_HEIGHT - 1
-
-    expect(canPlaceCard(state, card(topRank), 0)).toBe(true)
-    expect(canPlaceCard(state, card(topRank - 1), 0)).toBe(false)
-    expect(canPlaceCard(state, special('gdb'), 0)).toBe(true)
+  it('generates O2 blocks from the seeded random stream', () => {
+    let state = startGame('O2-0')
+    state = finishAnimation(moveBoard(state, 'left'))
+    state = finishAnimation(moveBoard(state, 'down'))
+    expect(state.boards.some((board) => board.pieces.some((item) => item.kind === 'o2'))).toBe(true)
   })
 
-  it('marks a problem solved and clears its queue when PC merges to AC', () => {
-    let state = startGame(fixedRandom)
-    const incoming = card(6)
-    state.queues[2].cards = [card(6)]
-    state.hand = [incoming]
-
-    state = play(state, incoming.uid, 2)
-    expect(state.queues[2].solved).toBe(true)
-    expect(state.queues[2].cards).toEqual([])
-    expect(state.solvedCount).toBe(1)
+  it('generates unique subtask shapes and a 3x3 100-point subtask per problem', () => {
+    const state = startGame('SUBTASKS')
+    for (const board of state.boards) {
+      expect(board.subtasks).toHaveLength(5)
+      const shapes = board.subtasks.map((item) => `${item.rows}x${item.cols}`)
+      expect(new Set(shapes).size).toBe(5)
+      expect(board.subtasks).toContainEqual(expect.objectContaining({ rows: 3, cols: 3, maxScore: 100 }))
+    }
+    const scoreSets = state.boards.map((board) => board.subtasks.map((item) => item.maxScore).join(','))
+    expect(new Set(scoreSets).size).toBeGreaterThan(1)
   })
 
-  it('places one forced Hack card every sixth round', () => {
-    const hand = generateHand(6, fixedRandom)
-    expect(hand).toHaveLength(3)
-    expect(hand.filter((item) => item.kind === 'hack')).toHaveLength(1)
+  it('uses the requested verdict score multipliers', () => {
+    expect(VERDICTS.map((item) => [item.label, item.multiplier])).toEqual([
+      ['CE', 0],
+      ['RE', 0],
+      ['UKE', 0.1],
+      ['MLE', 0.2],
+      ['TLE', 0.4],
+      ['WA', 0.8],
+      ['AC', 1],
+    ])
+    const state = isolatedState([])
+    const board = activeBoard(state)
+    expect(pieceScore(board, piece('single-50', 2, 0, 0))).toBe(5)
+    expect(pieceScore(board, piece('single-50', 5, 0, 0))).toBe(40)
+    expect(pieceScore(board, piece('single-50', 6, 0, 0))).toBe(50)
   })
 
-  it('makes O2 risky for verdicts better than RE', () => {
-    let state = startGame(fixedRandom)
-    const o2 = special('o2')
-    state.queues[0].cards = [card(4)]
-    state.hand = [o2]
-
-    state = play(state, o2.uid, 0, () => 0.1)
-    expect(state.queues[0].cards[0].rank).toBe(2)
-    expect(state.message).toContain('RE')
-
-    const safeState = startGame(fixedRandom)
-    const safeO2 = special('o2')
-    safeState.queues[0].cards = [card(4)]
-    safeState.hand = [safeO2]
-    const promoted = play(safeState, safeO2.uid, 0, () => 0.9)
-    expect(promoted.queues[0].cards[0].rank).toBe(5)
+  it('uses the Luogu-inspired verdict palette', () => {
+    expect(VERDICTS.map((item) => item.color)).toEqual([
+      '#f1c40f',
+      '#9b59b6',
+      '#4b3f92',
+      '#205493',
+      '#123f70',
+      '#e74c3c',
+      '#52c41a',
+    ])
   })
 
-  it('applies GDB, long long, and Subtask to their intended verdicts', () => {
-    let gdbState = startGame(fixedRandom)
-    const gdb = special('gdb')
-    gdbState.queues[0].cards = [card(2)]
-    gdbState.hand = [gdb]
-    gdbState = play(gdbState, gdb.uid)
-    expect(gdbState.queues[0].cards).toEqual([])
+  it('requires the entire moving cross-section to fit the front block', () => {
+    const state = isolatedState([])
+    const board = activeBoard(state)
+    const tallMoving = piece('tall-60', 0, 0, 3)
+    const shortFront = piece('single-50', 0, 0, 0)
+    const tallFront = piece('tall-60', 0, 0, 0)
+    expect(crossSectionFits(board, tallMoving, shortFront, 'left')).toBe(false)
+    expect(crossSectionFits(board, tallMoving, tallFront, 'left')).toBe(true)
 
-    let longState = startGame(fixedRandom)
-    const longLong = special('longLong')
-    longState.queues[0].cards = [card(5)]
-    longState.hand = [longLong]
-    longState = play(longState, longLong.uid)
-    expect(longState.queues[0].cards[0].rank).toBe(6)
+    const wideMoving = piece('wide4-80', 0, 2, 0)
+    const narrowFront = piece('wide-30', 0, 0, 0)
+    const wideFront = piece('wide4-80', 0, 0, 0)
+    expect(crossSectionFits(board, wideMoving, narrowFront, 'up')).toBe(false)
+    expect(crossSectionFits(board, wideMoving, wideFront, 'up')).toBe(true)
+  })
 
-    let subtaskState = startGame(fixedRandom)
-    const subtask = special('subtask')
-    subtaskState.queues[0].cards = [card(4)]
-    subtaskState.hand = [subtask]
-    subtaskState = play(subtaskState, subtask.uid)
-    expect(subtaskState.queues[0].cards[0].rank).toBe(6)
+  it('stops cleanly on partial contact without merging', () => {
+    const front = piece('single-50', 0, 0, 0)
+    const moving = piece('tall-60', 0, 0, 4)
+    const state = moveBoard(isolatedState([front, moving]), 'left')
+    expect(activeBoard(state).pieces.find((item) => item.id === front.id)).toMatchObject({ verdictLevel: 0 })
+    expect(activeBoard(state).pieces.find((item) => item.id === moving.id)).toMatchObject({ col: 1, verdictLevel: 0 })
+    expect(state.mergeCount).toBe(0)
+  })
+
+  it('compacts front-to-back with deterministic collision order', () => {
+    const front = piece('single-50', 0, 0, 0)
+    const middle = piece('single-50', 0, 0, 3)
+    const back = piece('single-50', 0, 0, 5)
+    const state = moveBoard(isolatedState([back, middle, front]), 'left')
+    expect(activeBoard(state).pieces.find((item) => item.id === front.id)).toMatchObject({ col: 0, verdictLevel: 1 })
+    expect(activeBoard(state).pieces.some((item) => item.id === middle.id)).toBe(false)
+    expect(activeBoard(state).pieces.find((item) => item.id === back.id)).toMatchObject({ col: 1, verdictLevel: 0 })
+  })
+
+  it('preserves the settled front subtask after a legal merge', () => {
+    const front = piece('tall-60', 1, 0, 0)
+    const moving = piece('single-50', 1, 0, 4)
+    const state = moveBoard(isolatedState([front, moving]), 'left')
+    const survivor = activeBoard(state).pieces.find((item) => item.id === front.id)
+    expect(survivor).toMatchObject({ subtaskId: 'tall-60', verdictLevel: 2 })
+    expect(activeBoard(state).currentScore).toBe(6)
+  })
+
+  it.each([
+    ['right', 0, 5, 0, 1],
+    ['up', 0, 0, 4, 0],
+    ['down', 5, 0, 1, 0],
+  ] as const)('keeps the front block when moving %s', (direction, frontRow, frontCol, movingRow, movingCol) => {
+    const front = piece('single-50', 0, frontRow, frontCol)
+    const moving = piece('single-50', 0, movingRow, movingCol)
+    const state = moveBoard(isolatedState([moving, front]), direction)
+    expect(activeBoard(state).pieces.find((item) => item.id === front.id)).toMatchObject({ verdictLevel: 1 })
+    expect(activeBoard(state).pieces.some((item) => item.id === moving.id)).toBe(false)
+  })
+
+  it('uses a moving O2 block to upgrade the front target directly', () => {
+    const target = piece('single-50', 5, 0, 0)
+    const optimizer = o2(0, 4)
+    const state = moveBoard(isolatedState([target, optimizer]), 'left')
+    expect(activeBoard(state).pieces.find((item) => item.id === target.id)).toMatchObject({
+      kind: 'verdict',
+      verdictLevel: 6,
+    })
+    expect(activeBoard(state).pieces.some((item) => item.id === optimizer.id)).toBe(false)
+    expect(activeBoard(state).currentScore).toBe(50)
+  })
+
+  it('does not let O2 combine with AC or act as the stationary target', () => {
+    const ac = piece('single-50', 6, 0, 0)
+    const optimizer = o2(0, 4)
+    const blocked = moveBoard(isolatedState([ac, optimizer]), 'left')
+    expect(activeBoard(blocked).pieces.find((item) => item.id === ac.id)).toMatchObject({ verdictLevel: 6 })
+    expect(activeBoard(blocked).pieces.find((item) => item.id === optimizer.id)).toMatchObject({ col: 1 })
+
+    const frontOptimizer = o2(0, 0)
+    const regular = piece('single-50', 0, 0, 4)
+    const reversed = moveBoard(isolatedState([frontOptimizer, regular]), 'left')
+    expect(activeBoard(reversed).pieces.some((item) => item.id === frontOptimizer.id)).toBe(true)
+    expect(activeBoard(reversed).pieces.find((item) => item.id === regular.id)).toMatchObject({ col: 1, verdictLevel: 0 })
+  })
+
+  it('moves every unsubmitted problem while leaving submitted problems frozen', () => {
+    const state = startGame('GLOBAL')
+    state.boards.forEach((board, index) => {
+      const subtaskId = board.subtasks[0].id
+      board.pieces = [piece(subtaskId, 0, 3, 3)]
+      if (index === 5) {
+        board.status = 'submitted'
+        board.submittedScore = 0
+      }
+    })
+    const frozen = structuredClone(state.boards[5].pieces)
+    const moved = moveBoard(state, 'left')
+    expect(moved.boards.slice(0, 5).every((board) => board.pieces.some((item) => item.col === 0))).toBe(true)
+    expect(moved.boards[5].pieces).toEqual(frozen)
+  })
+
+  it('uses the current board maximum instead of retaining a historical peak', () => {
+    const front = piece('wide-30', 2, 0, 0)
+    const moving = piece('single-50', 2, 0, 4)
+    const state = isolatedState([front, moving])
+    state.boards[0].subtasks.find((item) => item.id === 'single-50')!.maxScore = 90
+    state.boards[0].currentScore = 9
+
+    const moved = moveBoard(state, 'left')
+    expect(activeBoard(moved).pieces.find((item) => item.id === front.id)).toMatchObject({ verdictLevel: 3 })
+    expect(activeBoard(moved).currentScore).toBe(6)
+    expect(moved.contestScore).toBe(6)
+  })
+
+  it('locks the current maximum when a problem is submitted', () => {
+    const state = isolatedState([piece('single-50', 5, 3, 3)])
+    state.boards[1].status = 'active'
+    state.boards[1].pieces = [piece('single-50', 0, 3, 3)]
+    const submitted = submitBoard(state, state.boards[0].id)
+    expect(submitted.boards[0]).toMatchObject({
+      status: 'submitted',
+      currentScore: 40,
+      submittedScore: 40,
+      autoSubmitted: false,
+    })
+    const snapshot = structuredClone(submitted.boards[0].pieces)
+    const moved = moveBoard(submitted, 'left')
+    expect(moved.boards[0].pieces).toEqual(snapshot)
+    expect(moved.boards[0].submittedScore).toBe(40)
+  })
+
+  it('automatically submits a full board at its current maximum', () => {
+    const pieces: BoardPiece[] = []
+    for (let row = 0; row < 6; row += 1) {
+      for (let col = 0; col < 6; col += 1) {
+        if (row === 5 && col === 3) continue
+        pieces.push(piece('single-50', col % 3, row, col))
+      }
+    }
+    const state = isolatedState(pieces)
+    state.boards[0].currentScore = 5
+    const moved = moveBoard(state, 'right')
+    expect(activeBoard(moved)).toMatchObject({
+      status: 'submitted',
+      submittedScore: 5,
+      autoSubmitted: true,
+    })
+  })
+
+  it('keeps all generated and moved pieces in bounds without overlap', () => {
+    let state = startGame('GEOMETRY')
+    for (const direction of ['left', 'down', 'right', 'up', 'left'] as const) {
+      state = finishAnimation(moveBoard(state, direction))
+      for (const board of state.boards) {
+        for (let left = 0; left < board.pieces.length; left += 1) {
+          const pieceLeft = board.pieces[left]
+          const size = pieceLeft.kind === 'o2'
+            ? { rows: 1, cols: 1 }
+            : board.subtasks.find((item) => item.id === pieceLeft.subtaskId)!
+          expect(pieceLeft.row).toBeGreaterThanOrEqual(0)
+          expect(pieceLeft.col).toBeGreaterThanOrEqual(0)
+          expect(pieceLeft.row + size.rows).toBeLessThanOrEqual(6)
+          expect(pieceLeft.col + size.cols).toBeLessThanOrEqual(6)
+          for (let right = left + 1; right < board.pieces.length; right += 1) {
+            expect(piecesOverlap(board, pieceLeft, board.pieces[right])).toBe(false)
+          }
+        }
+      }
+    }
   })
 })
