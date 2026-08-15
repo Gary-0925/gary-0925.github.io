@@ -18,6 +18,7 @@
 
 * { box-sizing: border-box; }
 html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
+a { background: var(--green); }
 body { min-height: 100vh; background: var(--page); }
 button { font: inherit; }
 button:focus-visible { outline: 3px solid rgba(143, 122, 102, .35); outline-offset: 2px; }
