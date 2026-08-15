@@ -193,7 +193,7 @@ export default function App() {
         <header className="game-header">
           <div className="title-block">
             <h1>AKNOI</h1>
-            <h3>可到 <a href="https://aknoi.page.gd/">https://aknoi.page.gd/</a> 上传成绩</h2>
+            <h3>可到 <a href="https://aknoi.page.gd/">https://aknoi.page.gd/</a> 上传成绩</h3>
           </div>
           <div className="score-group">
             <div><span>总分</span><strong>{formatTotalScore(state.contestScore)}</strong></div>
