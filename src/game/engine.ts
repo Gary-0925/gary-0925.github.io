@@ -1,30 +1,61 @@
 import {
-  HAND_SIZE,
-  MAX_QUEUE_HEIGHT,
-  PROBLEM_QUEUES,
+  AC_LEVEL,
+  BOARD_SIZE,
+  GENERATED_SHAPES,
   VERDICTS,
 } from '../data/verdicts'
-import type { GameState, JudgeCard, MessageTone } from './types'
+import type {
+  BoardPiece,
+  Direction,
+  GameState,
+  MessageTone,
+  PieceMotion,
+  ProblemBoard,
+  SubtaskDefinition,
+  VerdictPiece,
+} from './types'
 
-type RandomSource = () => number
-
-let uidSequence = 0
-
-function uid(prefix: string) {
-  uidSequence += 1
-  return `${prefix}-${uidSequence}`
+interface RandomContext {
+  rngState: number
+  nextId: number
 }
 
-function verdictCard(rank: number): JudgeCard {
-  return { uid: uid('submission'), kind: 'verdict', rank }
+const BOARD_LABELS = ['A', 'B', 'C', 'D', 'E', 'F']
+const SUBTASK_SCORES = [10, 20, 30, 40, 50, 60, 70, 80, 90]
+
+function hashSeed(seed: string) {
+  let hash = 2166136261
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
 }
 
-function specialCard(kind: Exclude<JudgeCard['kind'], 'verdict'>): JudgeCard {
-  return { uid: uid(kind), kind }
+function nextRandom(context: RandomContext) {
+  context.rngState = (context.rngState + 0x6d2b79f5) >>> 0
+  let value = context.rngState
+  value = Math.imul(value ^ (value >>> 15), value | 1)
+  value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+  return ((value ^ (value >>> 14)) >>> 0) / 4294967296
 }
 
-function clone(state: GameState): GameState {
-  return structuredClone(state)
+function uid(context: RandomContext, prefix: string) {
+  context.nextId += 1
+  return `${prefix}-${context.nextId}`
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value)
+}
+
+function shuffle<T>(items: T[], context: RandomContext) {
+  const result = [...items]
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(nextRandom(context) * (index + 1))
+    ;[result[index], result[target]] = [result[target], result[index]]
+  }
+  return result
 }
 
 function setMessage(
@@ -37,377 +68,449 @@ function setMessage(
   state.eventId += 1
 }
 
-function drawRandomCard(round: number, random: RandomSource) {
-  const specialRoll = random()
-  if (specialRoll < 0.055) return specialCard('o2')
-  if (specialRoll < 0.075) return specialCard('o3')
-  if (specialRoll < 0.11) return specialCard('gdb')
-  if (specialRoll < 0.135) return specialCard('longLong')
-  if (specialRoll < 0.15) return specialCard('subtask')
-
-  const baseTier = Math.min(5, Math.floor((round - 1) / 8))
-  const rankRoll = random()
-  let rank = baseTier
-  if (rankRoll > 0.62) rank += 1
-  if (rankRoll > 0.9) rank += 1
-  return verdictCard(Math.min(rank, 6))
+function getSubtask(board: ProblemBoard, piece: VerdictPiece) {
+  return board.subtasks.find((item) => item.id === piece.subtaskId)!
 }
 
-export function generateHand(
-  round: number,
-  random: RandomSource = Math.random,
-): JudgeCard[] {
-  if (round === 1) {
-    return [verdictCard(0), verdictCard(0), verdictCard(1)]
-  }
+function getPieceSize(board: ProblemBoard, piece: BoardPiece) {
+  return piece.kind === 'o2'
+    ? { rows: 1, cols: 1 }
+    : getSubtask(board, piece)
+}
 
-  const hand = Array.from({ length: HAND_SIZE }, () =>
-    drawRandomCard(round, random),
+export function pieceScore(board: ProblemBoard, piece: BoardPiece) {
+  if (piece.kind === 'o2') return 0
+  const subtask = getSubtask(board, piece)
+  const score = subtask.maxScore * VERDICTS[piece.verdictLevel].multiplier
+  return Math.round(score * 10) / 10
+}
+
+export function piecesOverlap(
+  board: ProblemBoard,
+  left: BoardPiece,
+  right: BoardPiece,
+) {
+  const leftSize = getPieceSize(board, left)
+  const rightSize = getPieceSize(board, right)
+  return !(
+    left.col + leftSize.cols <= right.col ||
+    right.col + rightSize.cols <= left.col ||
+    left.row + leftSize.rows <= right.row ||
+    right.row + rightSize.rows <= left.row
   )
-
-  if (round % 6 === 0) {
-    hand[Math.floor(random() * HAND_SIZE)] = specialCard('hack')
-  }
-  return hand
 }
 
-function baseState(screen: GameState['screen']): GameState {
+function isInsideBoard(board: ProblemBoard, piece: BoardPiece) {
+  const size = getPieceSize(board, piece)
+  return (
+    piece.row >= 0 &&
+    piece.col >= 0 &&
+    piece.row + size.rows <= BOARD_SIZE &&
+    piece.col + size.cols <= BOARD_SIZE
+  )
+}
+
+export function crossSectionFits(
+  board: ProblemBoard,
+  moving: BoardPiece,
+  target: BoardPiece,
+  direction: Direction,
+) {
+  const movingSize = getPieceSize(board, moving)
+  const targetSize = getPieceSize(board, target)
+  if (direction === 'left' || direction === 'right') {
+    return (
+      target.row <= moving.row &&
+      target.row + targetSize.rows >= moving.row + movingSize.rows
+    )
+  }
+  return (
+    target.col <= moving.col &&
+    target.col + targetSize.cols >= moving.col + movingSize.cols
+  )
+}
+
+function availablePlacements(
+  board: ProblemBoard,
+  subtask: SubtaskDefinition,
+) {
+  const placements: Array<{ row: number; col: number }> = []
+  for (let row = 0; row <= BOARD_SIZE - subtask.rows; row += 1) {
+    for (let col = 0; col <= BOARD_SIZE - subtask.cols; col += 1) {
+      const candidate: BoardPiece = {
+        kind: 'verdict',
+        id: 'candidate',
+        subtaskId: subtask.id,
+        verdictLevel: 0,
+        row,
+        col,
+      }
+      if (!board.pieces.some((piece) => piecesOverlap(board, candidate, piece))) {
+        placements.push({ row, col })
+      }
+    }
+  }
+  return placements
+}
+
+function availableO2Placements(board: ProblemBoard) {
+  const placements: Array<{ row: number; col: number }> = []
+  for (let row = 0; row < BOARD_SIZE; row += 1) {
+    for (let col = 0; col < BOARD_SIZE; col += 1) {
+      const candidate: BoardPiece = {
+        kind: 'o2',
+        id: 'candidate-o2',
+        row,
+        col,
+      }
+      if (!board.pieces.some((piece) => piecesOverlap(board, candidate, piece))) {
+        placements.push({ row, col })
+      }
+    }
+  }
+  return placements
+}
+
+function chooseSpawnSubtask(board: ProblemBoard, context: RandomContext) {
+  const roll = nextRandom(context)
+  if (roll < 0.8) return board.subtasks[0]
+  if (roll < 0.985) {
+    const middle = board.subtasks.slice(1, -1)
+    return middle[Math.floor(nextRandom(context) * middle.length)]
+  }
+  return board.subtasks.at(-1)!
+}
+
+function spawnPiece(
+  board: ProblemBoard,
+  context: RandomContext,
+  forcedSubtask?: SubtaskDefinition,
+) {
+  if (!forcedSubtask && nextRandom(context) < 0.05) {
+    const placements = availableO2Placements(board)
+    if (placements.length > 0) {
+      const placement = placements[Math.floor(nextRandom(context) * placements.length)]
+      const piece: BoardPiece = {
+        kind: 'o2',
+        id: uid(context, 'o2'),
+        ...placement,
+      }
+      board.pieces.push(piece)
+      return piece.id
+    }
+  }
+
+  const preferred = forcedSubtask ?? chooseSpawnSubtask(board, context)
+  const fallback = [...board.subtasks].sort(
+    (left, right) => left.rows * left.cols - right.rows * right.cols,
+  )
+  const subtasks = [preferred, ...fallback.filter((item) => item.id !== preferred.id)]
+
+  for (const subtask of subtasks) {
+    const placements = availablePlacements(board, subtask)
+    if (placements.length === 0) continue
+    const placement = placements[Math.floor(nextRandom(context) * placements.length)]
+    const verdictLevel = nextRandom(context) < 0.88 ? 0 : 1
+    const piece: BoardPiece = {
+      kind: 'verdict',
+      id: uid(context, 'piece'),
+      subtaskId: subtask.id,
+      verdictLevel,
+      ...placement,
+    }
+    board.pieces.push(piece)
+    return piece.id
+  }
+  return undefined
+}
+
+function generateSubtasks(boardId: string, context: RandomContext) {
+  const generatedShapes = shuffle(GENERATED_SHAPES, context).slice(0, 3)
+  const scores = shuffle(SUBTASK_SCORES, context).slice(0, 4)
+  const shapes = [
+    { rows: 1, cols: 1 },
+    ...generatedShapes,
+    { rows: 3, cols: 3 },
+  ]
+  return shapes.map((shape, index): SubtaskDefinition => ({
+    id: `${boardId}-subtask-${index + 1}`,
+    rows: shape.rows,
+    cols: shape.cols,
+    maxScore: index === shapes.length - 1 ? 100 : scores[index],
+  }))
+}
+
+function createBoard(label: string, context: RandomContext): ProblemBoard {
+  const id = `problem-${label}`
+  const board: ProblemBoard = {
+    id,
+    label,
+    status: 'active',
+    subtasks: generateSubtasks(id, context),
+    pieces: [],
+    currentScore: 0,
+  }
+  spawnPiece(board, context, board.subtasks[0])
+  spawnPiece(board, context, board.subtasks[0])
+  return board
+}
+
+export function startGame(seed = 'AKNOI'): GameState {
+  const normalizedSeed = seed.trim() || 'AKNOI'
+  const context: RandomContext = {
+    rngState: hashSeed(normalizedSeed),
+    nextId: 0,
+  }
+  const boards = BOARD_LABELS.map((label) => createBoard(label, context))
   return {
-    screen,
-    round: 1,
-    score: 0,
-    queues: PROBLEM_QUEUES.map(() => ({ cards: [], solved: false })),
-    hand: [],
-    solvedCount: 0,
+    screen: 'playing',
+    seed: normalizedSeed,
+    rngState: context.rngState,
+    nextId: context.nextId,
+    boards,
+    motion: [],
+    spawnedPieceIds: [],
+    contestScore: 0,
+    moves: 0,
     mergeCount: 0,
-    maxRank: 0,
-    message: '拖动卡片到队列，或点选卡片后快速提交。',
+    message: '六题同时评测；可以随时提交任意题目。',
     messageTone: 'neutral',
     eventId: 0,
     lastEvent: 'none',
   }
 }
 
-export function createInitialState(): GameState {
-  return baseState('cover')
+function movementDelta(direction: Direction) {
+  if (direction === 'up') return { row: -1, col: 0 }
+  if (direction === 'down') return { row: 1, col: 0 }
+  if (direction === 'left') return { row: 0, col: -1 }
+  return { row: 0, col: 1 }
 }
 
-export function startGame(random: RandomSource = Math.random): GameState {
-  const state = baseState('playing')
-  state.hand = generateHand(1, random)
-  return state
+function orderPieces(board: ProblemBoard, direction: Direction) {
+  return [...board.pieces].sort((left, right) => {
+    const leftSize = getPieceSize(board, left)
+    const rightSize = getPieceSize(board, right)
+    if (direction === 'left') return left.col - right.col || left.row - right.row
+    if (direction === 'right') {
+      return right.col + rightSize.cols - (left.col + leftSize.cols) || left.row - right.row
+    }
+    if (direction === 'up') return left.row - right.row || left.col - right.col
+    return right.row + rightSize.rows - (left.row + leftSize.rows) || left.col - right.col
+  })
 }
 
-export function selectCard(current: GameState, cardUid: string): GameState {
-  if (current.screen !== 'playing') return current
-  if (!current.hand.some((card) => card.uid === cardUid)) return current
-  const state = clone(current)
-  state.selectedId = state.selectedId === cardUid ? undefined : cardUid
-  if (state.selectedId) {
-    setMessage(state, '选择下方 T1～T4，或直接点击发光的队列。')
-  }
-  return state
+interface MoveResult {
+  pieces: BoardPiece[]
+  motion: Omit<PieceMotion, 'boardId'>[]
+  changed: boolean
+  merges: number
 }
 
-export function canPlaceCard(
-  state: GameState,
-  card: JudgeCard,
-  queueIndex: number,
-) {
-  const queue = state.queues[queueIndex]
-  if (!queue) return false
+// Front-to-back compaction: each block travels to its final position exactly once.
+// Only already-settled blocks can stop it, so collision order is deterministic.
+function simulateMove(board: ProblemBoard, direction: Direction): MoveResult {
+  const originalPieces = clone(board.pieces)
+  const settled: BoardPiece[] = []
+  const mergedIds = new Set<string>()
+  const removedDestinations = new Map<string, { row: number; col: number }>()
+  const delta = movementDelta(direction)
+  let changed = false
+  let merges = 0
 
-  // Special cards modify the queue instead of occupying a slot.
-  if (card.kind !== 'verdict') return true
-  if (queue.cards.length < MAX_QUEUE_HEIGHT) return true
+  for (const original of orderPieces(board, direction)) {
+    let moving = clone(original)
+    let collisions: BoardPiece[] = []
+    let collisionPosition: BoardPiece | undefined
 
-  const top = queue.cards.at(-1)
-  return Boolean(top?.kind === 'verdict' && top.rank === card.rank)
-}
+    while (true) {
+      const proposed: BoardPiece = {
+        ...moving,
+        row: moving.row + delta.row,
+        col: moving.col + delta.col,
+      }
+      if (!isInsideBoard(board, proposed)) break
+      collisions = settled.filter((target) => piecesOverlap(board, proposed, target))
+      if (collisions.length > 0) {
+        collisionPosition = proposed
+        break
+      }
+      moving = proposed
+    }
 
-function solveQueue(state: GameState, queueIndex: number) {
-  const queue = state.queues[queueIndex]
-  const firstSolve = !queue.solved
-  queue.cards = []
-  queue.solved = true
-  state.score += firstSolve ? 1000 : 256
-  state.maxRank = VERDICTS.length - 1
-  state.lastEvent = 'ac'
-
-  if (firstSolve) {
-    state.solvedCount += 1
-    setMessage(
-      state,
-      `${PROBLEM_QUEUES[queueIndex].number} Accepted！还差 ${PROBLEM_QUEUES.length - state.solvedCount} 题。`,
-      'good',
+    const target = collisions.length === 1 ? collisions[0] : undefined
+    const fitsTarget = Boolean(
+      target &&
+      collisionPosition &&
+      !mergedIds.has(target.id) &&
+      crossSectionFits(board, moving, target, direction),
     )
-  } else {
-    setMessage(state, '这道题已经 AC；重复提交被清空了。', 'warn')
+    const o2Merge = Boolean(
+      fitsTarget &&
+      moving.kind === 'o2' &&
+      target?.kind === 'verdict' &&
+      target.verdictLevel < AC_LEVEL,
+    )
+    const verdictMerge = Boolean(
+      fitsTarget &&
+      moving.kind === 'verdict' &&
+      target?.kind === 'verdict' &&
+      target.verdictLevel === moving.verdictLevel &&
+      target.verdictLevel < AC_LEVEL,
+    )
+
+    if (target?.kind === 'verdict' && collisionPosition && (o2Merge || verdictMerge)) {
+      target.verdictLevel += 1
+      mergedIds.add(target.id)
+      removedDestinations.set(original.id, {
+        row: collisionPosition.row,
+        col: collisionPosition.col,
+      })
+      changed = true
+      merges += 1
+      continue
+    }
+
+    if (moving.row !== original.row || moving.col !== original.col) changed = true
+    settled.push(moving)
   }
 
-  if (state.solvedCount === PROBLEM_QUEUES.length) {
-    state.screen = 'won'
-    state.score += Math.max(0, 5000 - state.round * 50)
-    setMessage(state, '四题全部通过。AK！', 'good')
-  }
-}
-
-function resolveQueue(state: GameState, queueIndex: number) {
-  const queue = state.queues[queueIndex]
-  let merged = 0
-  let highestRank = -1
-
-  while (queue.cards.length >= 2) {
-    const top = queue.cards.at(-1)
-    const below = queue.cards.at(-2)
-    if (
-      !top ||
-      !below ||
-      top.kind !== 'verdict' ||
-      below.kind !== 'verdict' ||
-      top.rank !== below.rank
+  const motion: Omit<PieceMotion, 'boardId'>[] = []
+  for (const original of originalPieces) {
+    const survivor = settled.find((piece) => piece.id === original.id)
+    const removedAt = removedDestinations.get(original.id)
+    if (removedAt) {
+      motion.push({
+        piece: original,
+        toRow: removedAt.row,
+        toCol: removedAt.col,
+        removed: true,
+      })
+    } else if (
+      survivor &&
+      (survivor.row !== original.row || survivor.col !== original.col)
     ) {
-      break
+      motion.push({
+        piece: original,
+        toRow: survivor.row,
+        toCol: survivor.col,
+        removed: false,
+      })
     }
-
-    queue.cards.pop()
-    queue.cards.pop()
-    const nextRank = (top.rank ?? 0) + 1
-    merged += 1
-    highestRank = Math.max(highestRank, nextRank)
-    state.mergeCount += 1
-    state.score += VERDICTS[nextRank].value
-    state.maxRank = Math.max(state.maxRank, nextRank)
-
-    if (nextRank >= VERDICTS.length - 1) {
-      solveQueue(state, queueIndex)
-      return
-    }
-    queue.cards.push(verdictCard(nextRank))
   }
 
-  if (merged > 0) {
-    state.lastEvent = 'merge'
-    const chain = merged > 1 ? `，连锁 ×${merged}` : ''
-    setMessage(state, `合并为 ${VERDICTS[highestRank].label}${chain}。`, 'good')
-  }
+  return { pieces: settled, motion, changed, merges }
 }
 
-function applyVerdict(state: GameState, card: JudgeCard, queueIndex: number) {
-  state.queues[queueIndex].cards.push(card)
-  state.maxRank = Math.max(state.maxRank, card.rank ?? 0)
-  state.lastEvent = 'place'
+export function canMove(board: ProblemBoard, direction: Direction) {
+  return simulateMove(board, direction).changed
+}
+
+export function hasAnyMove(board: ProblemBoard) {
+  const directions: Direction[] = ['up', 'down', 'left', 'right']
+  return directions.some((direction) => canMove(board, direction))
+}
+
+function isBoardFull(board: ProblemBoard) {
+  return availablePlacements(board, board.subtasks[0]).length === 0
+}
+
+function refreshBoardScore(board: ProblemBoard) {
+  if (board.status === 'submitted') return
+  board.currentScore = board.pieces.reduce(
+    (best, piece) => Math.max(best, pieceScore(board, piece)),
+    0,
+  )
+}
+
+function refreshContest(state: GameState) {
+  state.contestScore = Math.round(
+    state.boards.reduce(
+      (sum, board) => sum + (board.submittedScore ?? board.currentScore),
+      0,
+    ) * 10,
+  ) / 10
+}
+
+function finishIfComplete(state: GameState) {
+  if (!state.boards.every((board) => board.status === 'submitted')) return
+  state.screen = 'finished'
+  state.lastEvent = 'finish'
+  setMessage(state, `比赛结束：${state.contestScore} / 600。`, state.contestScore === 600 ? 'good' : 'warn')
+}
+
+export function finishAnimation(current: GameState): GameState {
+  if (current.motion.length === 0 && current.spawnedPieceIds.length === 0) return current
+  return { ...current, motion: [], spawnedPieceIds: [] }
+}
+
+export function moveBoard(current: GameState, direction: Direction): GameState {
+  if (current.screen !== 'playing' || current.motion.length > 0) return current
+
+  const plans = current.boards.map((board) =>
+    board.status === 'active' ? simulateMove(board, direction) : undefined,
+  )
+  if (!plans.some((plan) => plan?.changed)) return current
+
+  const state = clone(current)
+  state.motion = []
+  state.spawnedPieceIds = []
+  state.moves += 1
+  let totalMerges = 0
+  const autoSubmitted: string[] = []
+
+  state.boards.forEach((board, index) => {
+    const plan = plans[index]
+    if (!plan?.changed || board.status !== 'active') return
+
+    board.pieces = plan.pieces
+    state.mergeCount += plan.merges
+    totalMerges += plan.merges
+    state.motion.push(
+      ...plan.motion.map((motion) => ({ ...motion, boardId: board.id })),
+    )
+    refreshBoardScore(board)
+
+    const spawnedId = spawnPiece(board, state)
+    if (spawnedId) state.spawnedPieceIds.push(spawnedId)
+    refreshBoardScore(board)
+
+    if (!spawnedId || isBoardFull(board) || !hasAnyMove(board)) {
+      board.status = 'submitted'
+      board.submittedScore = board.currentScore
+      board.autoSubmitted = true
+      autoSubmitted.push(board.label)
+    }
+  })
+
+  refreshContest(state)
+  state.lastEvent = totalMerges > 0 ? 'merge' : 'move'
+  const parts: string[] = []
+  if (totalMerges) parts.push(`合并 ${totalMerges} 次`)
+  if (autoSubmitted.length) parts.push(`${autoSubmitted.join('、')} 题自动提交`)
   setMessage(
     state,
-    `${PROBLEM_QUEUES[queueIndex].number} 返回 ${VERDICTS[card.rank ?? 0].label}。`,
+    parts.length ? parts.join('；') : '六题继续评测。',
+    autoSubmitted.length ? 'warn' : totalMerges ? 'good' : 'neutral',
   )
-  resolveQueue(state, queueIndex)
-}
-
-function setTopRank(
-  state: GameState,
-  queueIndex: number,
-  rank: number,
-): 'none' | 'merge' | 'ac' {
-  const queue = state.queues[queueIndex]
-  const mergesBefore = state.mergeCount
-  const solvedBefore = state.solvedCount
-  queue.cards[queue.cards.length - 1] = verdictCard(rank)
-  state.maxRank = Math.max(state.maxRank, rank)
-  if (rank >= VERDICTS.length - 1) {
-    solveQueue(state, queueIndex)
-  } else {
-    resolveQueue(state, queueIndex)
-  }
-  if (state.solvedCount > solvedBefore || state.lastEvent === 'ac') return 'ac'
-  if (state.mergeCount > mergesBefore) return 'merge'
-  return 'none'
-}
-
-function applyOptimization(
-  state: GameState,
-  queueIndex: number,
-  steps: number,
-  risk: number,
-  riskStartsAt: number,
-  label: 'O2' | 'O3',
-  random: RandomSource,
-) {
-  const top = state.queues[queueIndex].cards.at(-1)
-  state.lastEvent = 'special'
-  if (!top || top.kind !== 'verdict') {
-    setMessage(state, `${label} 找不到可优化的提交，白吸了。`, 'warn')
-    return
-  }
-
-  const currentRank = top.rank ?? 0
-  if (currentRank >= riskStartsAt && random() < risk) {
-    setTopRank(state, queueIndex, 2)
-    state.lastEvent = 'hack'
-    setMessage(
-      state,
-      `${label} 优化破坏了未定义行为：${VERDICTS[currentRank].label} → RE。`,
-      'bad',
-    )
-    return
-  }
-
-  const nextRank = Math.min(currentRank + steps, VERDICTS.length - 1)
-  state.score += VERDICTS[nextRank].value
-  const outcome = setTopRank(state, queueIndex, nextRank)
-  if (state.screen === 'playing' && outcome === 'none') {
-    state.lastEvent = 'special'
-    setMessage(state, `${label} 生效：队尾变为 ${VERDICTS[nextRank].label}。`, 'good')
-  }
-}
-
-function applyHack(state: GameState, queueIndex: number) {
-  const queue = state.queues[queueIndex]
-  const top = queue.cards.at(-1)
-  state.lastEvent = 'hack'
-
-  if (!top || top.kind !== 'verdict') {
-    queue.cards.push(verdictCard(0))
-    setMessage(state, 'Hack 数据制造了一张 CE。', 'bad')
-    return
-  }
-
-  const nextRank = Math.max(0, (top.rank ?? 0) - 1)
-  const outcome = setTopRank(state, queueIndex, nextRank)
-  if (outcome === 'none') {
-    state.lastEvent = 'hack'
-    setMessage(
-      state,
-      `Hack 命中：${VERDICTS[top.rank ?? 0].label} 降为 ${VERDICTS[nextRank].label}。`,
-      'bad',
-    )
-  }
-}
-
-function applyGdb(state: GameState, queueIndex: number) {
-  const queue = state.queues[queueIndex]
-  const top = queue.cards.at(-1)
-  state.lastEvent = 'special'
-  if (top?.kind === 'verdict' && (top.rank ?? 0) <= 2) {
-    queue.cards.pop()
-    state.score += 10
-    setMessage(state, `GDB 定位并删除了 ${VERDICTS[top.rank ?? 0].label}。`, 'good')
-  } else {
-    setMessage(state, 'GDB 没找到 CE、Judging 或 RE，断点落空。', 'warn')
-  }
-}
-
-function applyLongLong(state: GameState, queueIndex: number) {
-  const top = state.queues[queueIndex].cards.at(-1)
-  state.lastEvent = 'special'
-  if (top?.kind === 'verdict' && (top.rank === 2 || top.rank === 5)) {
-    const nextRank = top.rank + 1
-    const outcome = setTopRank(state, queueIndex, nextRank)
-    if (outcome === 'none') {
-      state.lastEvent = 'special'
-      setMessage(
-        state,
-        `long long 修复了 ${VERDICTS[top.rank].label}，现在是 ${VERDICTS[nextRank].label}。`,
-        'good',
-      )
-    }
-  } else {
-    setMessage(state, '这里的问题不是 int 溢出，long long 没有作用。', 'warn')
-  }
-}
-
-function applySubtask(state: GameState, queueIndex: number) {
-  const top = state.queues[queueIndex].cards.at(-1)
-  state.lastEvent = 'special'
-  if (
-    top?.kind === 'verdict' &&
-    top.rank !== undefined &&
-    top.rank >= 3 &&
-    top.rank <= 5
-  ) {
-    const oldRank = top.rank
-    const outcome = setTopRank(state, queueIndex, 6)
-    if (outcome === 'none') {
-      state.lastEvent = 'special'
-      setMessage(
-        state,
-        `Subtask 生效：${VERDICTS[oldRank].label} → PC。`,
-        'good',
-      )
-    }
-  } else {
-    setMessage(state, '当前状态不满足部分分条件。', 'warn')
-  }
-}
-
-function hasAnyMove(state: GameState) {
-  return state.hand.some((card) =>
-    state.queues.some((_, index) => canPlaceCard(state, card, index)),
-  )
-}
-
-function checkAfo(state: GameState) {
-  if (state.screen !== 'playing' || state.hand.length === 0) return
-  if (hasAnyMove(state)) return
-  state.screen = 'lost'
-  state.lastEvent = 'afo'
-  setMessage(state, '所有提交都无法入队：AFO。', 'bad')
-}
-
-function advanceRound(state: GameState, random: RandomSource) {
-  if (state.screen !== 'playing' || state.hand.length > 0) return
-  state.round += 1
-  state.hand = generateHand(state.round, random)
-  state.selectedId = undefined
-  if (state.round % 6 === 0) {
-    state.message = `${state.message} 下一组含 Hack 数据。`
-    state.messageTone = 'warn'
-  }
-  checkAfo(state)
-}
-
-export function placeCard(
-  current: GameState,
-  cardUid: string,
-  queueIndex: number,
-  random: RandomSource = Math.random,
-): GameState {
-  if (current.screen !== 'playing') return current
-  const card = current.hand.find((item) => item.uid === cardUid)
-  if (!card || !canPlaceCard(current, card, queueIndex)) {
-    const invalid = clone(current)
-    setMessage(invalid, '队列已满，队尾也无法与这张牌合并。', 'warn')
-    return invalid
-  }
-
-  const state = clone(current)
-  const cardIndex = state.hand.findIndex((item) => item.uid === cardUid)
-  const [playedCard] = state.hand.splice(cardIndex, 1)
-  state.selectedId = undefined
-
-  if (playedCard.kind === 'verdict') applyVerdict(state, playedCard, queueIndex)
-  if (playedCard.kind === 'o2') applyOptimization(state, queueIndex, 1, 0.3, 3, 'O2', random)
-  if (playedCard.kind === 'o3') applyOptimization(state, queueIndex, 2, 0.45, 2, 'O3', random)
-  if (playedCard.kind === 'hack') applyHack(state, queueIndex)
-  if (playedCard.kind === 'gdb') applyGdb(state, queueIndex)
-  if (playedCard.kind === 'longLong') applyLongLong(state, queueIndex)
-  if (playedCard.kind === 'subtask') applySubtask(state, queueIndex)
-
-  advanceRound(state, random)
-  checkAfo(state)
+  finishIfComplete(state)
   return state
 }
 
-export function placeSelected(
-  current: GameState,
-  queueIndex: number,
-  random: RandomSource = Math.random,
-): GameState {
-  if (!current.selectedId) return current
-  return placeCard(current, current.selectedId, queueIndex, random)
-}
+export function submitBoard(current: GameState, boardId: string): GameState {
+  if (current.screen !== 'playing' || current.motion.length > 0) return current
+  const currentBoard = current.boards.find((board) => board.id === boardId)
+  if (!currentBoard || currentBoard.status !== 'active') return current
 
-export function turnsUntilHack(round: number) {
-  const remainder = round % 6
-  return remainder === 0 ? 0 : 6 - remainder
+  const state = clone(current)
+  const board = state.boards.find((item) => item.id === boardId)!
+  refreshBoardScore(board)
+  board.status = 'submitted'
+  board.submittedScore = board.currentScore
+  board.autoSubmitted = false
+  state.lastEvent = 'submit'
+  refreshContest(state)
+  setMessage(state, `${board.label} 题已提交：${board.submittedScore} 分。`, board.submittedScore > 0 ? 'good' : 'warn')
+  finishIfComplete(state)
+  return state
 }

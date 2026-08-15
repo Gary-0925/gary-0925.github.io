@@ -5,7 +5,7 @@ export function setSoundEnabled(value: boolean) {
   enabled = value
 }
 
-export function playSound(type: 'paper' | 'ink' | 'hit' | 'chain' | 'win' | 'enemy') {
+export function playSound(type: 'paper' | 'chain' | 'win' | 'enemy') {
   if (!enabled || typeof window === 'undefined') return
 
   try {
@@ -18,8 +18,6 @@ export function playSound(type: 'paper' | 'ink' | 'hit' | 'chain' | 'win' | 'ene
 
     const settings = {
       paper: [180, 0.025, 'triangle'],
-      ink: [320, 0.04, 'sine'],
-      hit: [130, 0.06, 'square'],
       chain: [620, 0.13, 'sine'],
       win: [780, 0.2, 'triangle'],
       enemy: [90, 0.09, 'sawtooth'],
