@@ -1,9 +1,6 @@
 <?php
 /**
  * AKNOI 排行榜配置。
- *
- * 这个文件会进入 Git 仓库，所以【不要】把真正的密钥写在这里。
- * 把密钥放进同目录下的 config.local.php（已被 .gitignore 忽略），
  * 它返回的数组会覆盖下面的默认值。
  *
  *   <?php
@@ -51,13 +48,5 @@ $defaults = [
     // 排行榜只统计最近多少天的成绩，奖牌线也按这个窗口内的人数算。
     'leaderboard_days' => 7,
 ];
-
-$localFile = __DIR__ . '/config.local.php';
-if (is_file($localFile)) {
-    $local = require $localFile;
-    if (is_array($local)) {
-        $defaults = array_merge($defaults, $local);
-    }
-}
 
 return $defaults;
