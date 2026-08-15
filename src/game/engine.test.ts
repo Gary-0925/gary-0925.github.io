@@ -6,6 +6,7 @@ import {
   moveBoard,
   pieceScore,
   piecesOverlap,
+  replayGame,
   startGame,
   submitBoard,
 } from './engine'
@@ -206,8 +207,8 @@ describe('AKNOI seeded engine', () => {
   it('moves every unsubmitted problem while leaving submitted problems frozen', () => {
     const state = startGame('GLOBAL')
     state.boards.forEach((board, index) => {
-      const subtaskId = board.subtasks[0].id
-      board.pieces = [piece(subtaskId, 0, 3, 3)]
+      const unit = board.subtasks.find((item) => item.rows === 1 && item.cols === 1)!
+      board.pieces = [piece(unit.id, 0, 3, 3)]
       if (index === 5) {
         board.status = 'submitted'
         board.submittedScore = 0
@@ -282,6 +283,28 @@ describe('AKNOI seeded engine', () => {
     expect(submitted.screen).toBe('finished')
   })
 
+  it('sorts every problem subtask key from the lowest score to the highest', () => {
+    for (const board of startGame('SORTED').boards) {
+      const scores = board.subtasks.map((item) => item.maxScore)
+      expect(scores).toEqual([...scores].sort((left, right) => left - right))
+      expect(scores.at(-1)).toBe(100)
+      expect(board.subtasks.at(-1)).toMatchObject({ rows: 3, cols: 3 })
+    }
+  })
+
+  it('still spawns the 1x1 unit subtask once the key is score sorted', () => {
+    const state = startGame('SPAWN-UNIT')
+    for (const board of state.boards) {
+      expect(board.pieces).toHaveLength(2)
+      for (const item of board.pieces) {
+        const subtask = board.subtasks.find(
+          (candidate) => item.kind === 'verdict' && candidate.id === item.subtaskId,
+        )!
+        expect(subtask).toMatchObject({ rows: 1, cols: 1 })
+      }
+    }
+  })
+
   it('labels the six problems D1T1 through D2T3', () => {
     expect(startGame('LABELS').boards.map((board) => board.label)).toEqual([
       'D1T1',
@@ -291,6 +314,34 @@ describe('AKNOI seeded engine', () => {
       'D2T2',
       'D2T3',
     ])
+  })
+
+  it('rebuilds an identical game from its seed and recorded actions', () => {
+    let state = startGame('REPLAY-SAVE')
+    for (const direction of ['left', 'down', 'right', 'up', 'left', 'up'] as const) {
+      state = finishAnimation(moveBoard(state, direction))
+    }
+    state = finishAnimation(submitBoard(state, state.boards[2].id))
+    state = finishAnimation(moveBoard(state, 'right'))
+
+    expect(replayGame(state.seed, state.history)).toEqual(state)
+  })
+
+  it('records every accepted action and ignores rejected ones', () => {
+    // One block already flush against the left wall: moving left is a no-op.
+    let state = isolatedState([piece('single-50', 0, 0, 0)])
+    expect(state.history).toEqual([])
+
+    expect(moveBoard(state, 'left').history).toEqual([])
+
+    state = finishAnimation(moveBoard(state, 'right'))
+    expect(state.history).toEqual([{ type: 'move', direction: 'right' }])
+
+    const boardId = state.boards[0].id
+    state = finishAnimation(submitBoard(state, boardId))
+    expect(state.history.at(-1)).toEqual({ type: 'submit', boardId })
+    // Submitting an already submitted problem is rejected, so nothing is logged.
+    expect(submitBoard(state, boardId).history).toEqual(state.history)
   })
 
   it('keeps all generated and moved pieces in bounds without overlap', () => {

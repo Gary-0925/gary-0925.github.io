@@ -79,11 +79,15 @@ function ProblemBoardView({
           </button>
         </div>
       </header>
-      <div className="subtask-key" aria-label={`${board.label} 子任务`}>
+      <div className="subtask-key" aria-label={`${board.label} 子任务，按分值排序`}>
         {board.subtasks.map((subtask) => (
-          <span key={subtask.id} title={`${subtask.rows}×${subtask.cols}，${subtask.maxScore} 分`}>
-            <i style={{ width: `${subtask.cols * 4 + 2}px`, height: `${subtask.rows * 4 + 2}px` }} />
+          <span
+            key={subtask.id}
+            title={`${subtask.rows}×${subtask.cols} 子任务，满分 ${subtask.maxScore}`}
+            aria-label={`${subtask.rows}乘${subtask.cols}，${subtask.maxScore} 分`}
+          >
             <b>{subtask.maxScore}</b>
+            <i>{subtask.rows}×{subtask.cols}</i>
           </span>
         ))}
       </div>

@@ -38,6 +38,10 @@ export interface ProblemBoard {
   submittedScore?: number
 }
 
+export type GameAction =
+  | { type: 'move'; direction: Direction }
+  | { type: 'submit'; boardId: string }
+
 export interface PieceMotion {
   boardId: string
   piece: BoardPiece
@@ -52,6 +56,8 @@ export interface GameState {
   rngState: number
   nextId: number
   boards: ProblemBoard[]
+  /** Every accepted action, in order. Seed + history fully rebuilds this state. */
+  history: GameAction[]
   motion: PieceMotion[]
   spawnedPieceIds: string[]
   contestScore: number

@@ -7,6 +7,7 @@ import {
 import type {
   BoardPiece,
   Direction,
+  GameAction,
   GameState,
   MessageTone,
   PieceMotion,
@@ -172,13 +173,17 @@ function availableO2Placements(board: ProblemBoard) {
 }
 
 function chooseSpawnSubtask(board: ProblemBoard, context: RandomContext) {
+  const unit = unitSubtask(board)
+  const jackpot = jackpotSubtask(board)
   const roll = nextRandom(context)
-  if (roll < 0.8) return board.subtasks[0]
+  if (roll < 0.8) return unit
   if (roll < 0.985) {
-    const middle = board.subtasks.slice(1, -1)
+    const middle = board.subtasks.filter(
+      (item) => item.id !== unit.id && item.id !== jackpot.id,
+    )
     return middle[Math.floor(nextRandom(context) * middle.length)]
   }
-  return board.subtasks.at(-1)!
+  return jackpot
 }
 
 function spawnPiece(
@@ -232,12 +237,24 @@ function generateSubtasks(boardId: string, context: RandomContext) {
     ...generatedShapes,
     { rows: 3, cols: 3 },
   ]
-  return shapes.map((shape, index): SubtaskDefinition => ({
+  const subtasks = shapes.map((shape, index): SubtaskDefinition => ({
     id: `${boardId}-subtask-${index + 1}`,
     rows: shape.rows,
     cols: shape.cols,
     maxScore: index === shapes.length - 1 ? 100 : scores[index],
   }))
+  // Stored low to high so every reader (board key, tooltips) is ordered by value.
+  return subtasks.sort((left, right) => left.maxScore - right.maxScore)
+}
+
+// The 1x1 subtask is the spawn//fill unit and the 100 point 3x3 is the jackpot,
+// so both are looked up by shape rather than by position in the sorted array.
+function unitSubtask(board: ProblemBoard) {
+  return board.subtasks.find((item) => item.rows === 1 && item.cols === 1)!
+}
+
+function jackpotSubtask(board: ProblemBoard) {
+  return board.subtasks.find((item) => item.rows === 3 && item.cols === 3)!
 }
 
 function createBoard(label: string, context: RandomContext): ProblemBoard {
@@ -250,8 +267,9 @@ function createBoard(label: string, context: RandomContext): ProblemBoard {
     pieces: [],
     currentScore: 0,
   }
-  spawnPiece(board, context, board.subtasks[0])
-  spawnPiece(board, context, board.subtasks[0])
+  const unit = unitSubtask(board)
+  spawnPiece(board, context, unit)
+  spawnPiece(board, context, unit)
   return board
 }
 
@@ -268,6 +286,7 @@ export function startGame(seed = 'AKNOI'): GameState {
     rngState: context.rngState,
     nextId: context.nextId,
     boards,
+    history: [],
     motion: [],
     spawnedPieceIds: [],
     contestScore: 0,
@@ -412,7 +431,7 @@ export function hasAnyMove(board: ProblemBoard) {
 }
 
 function isBoardFull(board: ProblemBoard) {
-  return availablePlacements(board, board.subtasks[0]).length === 0
+  return availablePlacements(board, unitSubtask(board)).length === 0
 }
 
 function refreshBoardScore(board: ProblemBoard) {
@@ -453,6 +472,7 @@ export function moveBoard(current: GameState, direction: Direction): GameState {
   if (!plans.some((plan) => plan?.changed)) return current
 
   const state = clone(current)
+  state.history.push({ type: 'move', direction })
   state.motion = []
   state.spawnedPieceIds = []
   state.moves += 1
@@ -497,6 +517,7 @@ export function submitBoard(current: GameState, boardId: string): GameState {
   if (!currentBoard || currentBoard.status !== 'active') return current
 
   const state = clone(current)
+  state.history.push({ type: 'submit', boardId })
   const board = state.boards.find((item) => item.id === boardId)!
   refreshBoardScore(board)
   board.status = 'submitted'
@@ -506,4 +527,21 @@ export function submitBoard(current: GameState, boardId: string): GameState {
   setMessage(state, `${board.label} 已提交：${board.submittedScore} 分。`, board.submittedScore > 0 ? 'good' : 'warn')
   finishIfComplete(state)
   return state
+}
+
+/**
+ * Rebuilds a game from its seed and recorded actions. The engine is fully
+ * deterministic, so this is enough to restore a session without storing pieces.
+ * Actions that no longer apply are skipped rather than throwing.
+ */
+export function replayGame(seed: string, actions: GameAction[]): GameState {
+  let state = startGame(seed)
+  for (const action of actions) {
+    const next =
+      action.type === 'move'
+        ? moveBoard(state, action.direction)
+        : submitBoard(state, action.boardId)
+    state = finishAnimation(next)
+  }
+  return finishAnimation(state)
 }

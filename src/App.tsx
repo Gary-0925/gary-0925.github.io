@@ -15,10 +15,15 @@ import { EndOverlay } from './components/EndOverlay'
 import { GameBoard } from './components/GameBoard'
 import { RulesModal } from './components/RulesModal'
 import { playSound, setSoundEnabled } from './game/audio'
-import { finishAnimation, moveBoard, startGame, submitBoard } from './game/engine'
+import { finishAnimation, moveBoard, replayGame, startGame, submitBoard } from './game/engine'
+import {
+  clearSavedGame,
+  loadSavedGame,
+  readBestScore,
+  saveGame,
+  writeBestScore,
+} from './game/storage'
 import type { Direction, GameState } from './game/types'
-
-const BEST_SCORE_KEY = 'aknoi-best-score'
 
 function formatScore(score: number) {
   return Number.isInteger(score) ? String(score) : score.toFixed(1)
@@ -34,21 +39,30 @@ function freshSeed() {
   }
 }
 
-function initialSeed() {
+function seedFromHash() {
   try {
-    const fromHash = decodeURIComponent(window.location.hash.slice(1)).trim()
-    return fromHash || freshSeed()
+    return decodeURIComponent(window.location.hash.slice(1)).trim()
   } catch {
-    return freshSeed()
+    return ''
   }
 }
 
-function readBestScore() {
-  try {
-    return Number(localStorage.getItem(BEST_SCORE_KEY) ?? 0)
-  } catch {
-    return 0
+/**
+ * A URL seed always wins; otherwise the last session is replayed from its
+ * recorded actions so the player continues exactly where they stopped.
+ */
+function initialState(): GameState {
+  const hashSeed = seedFromHash()
+  const saved = loadSavedGame()
+  if (hashSeed && (!saved || saved.seed !== hashSeed)) return startGame(hashSeed)
+  if (saved) {
+    try {
+      return replayGame(saved.seed, saved.actions)
+    } catch {
+      clearSavedGame()
+    }
   }
+  return startGame(hashSeed || freshSeed())
 }
 
 function soundForState(previous: GameState, next: GameState) {
@@ -66,7 +80,7 @@ const DIRECTIONS: Array<{ direction: Direction; icon: typeof ArrowUp; label: str
 ]
 
 export default function App() {
-  const [state, setState] = useState<GameState>(() => startGame(initialSeed()))
+  const [state, setState] = useState<GameState>(initialState)
   const [seedInput, setSeedInput] = useState(() => state.seed)
   const [showRules, setShowRules] = useState(false)
   const [soundEnabled, setSound] = useState(true)
@@ -82,6 +96,7 @@ export default function App() {
 
   const loadSeed = useCallback((seed: string) => {
     const next = startGame(seed)
+    clearSavedGame()
     setState(next)
     setSeedInput(next.seed)
     window.location.hash = encodeURIComponent(next.seed)
@@ -111,12 +126,18 @@ export default function App() {
   useEffect(() => {
     if (state.screen !== 'finished' || state.contestScore <= bestScore) return
     setBestScore(state.contestScore)
-    try {
-      localStorage.setItem(BEST_SCORE_KEY, String(state.contestScore))
-    } catch {
-      // Local records are optional.
-    }
+    writeBestScore(state.contestScore)
   }, [state.screen, state.contestScore, bestScore])
+
+  // Persist the action log after every accepted action so a reload resumes here.
+  useEffect(() => {
+    saveGame(state)
+  }, [state.history, state.seed])
+
+  useEffect(() => {
+    if (seedFromHash() === state.seed) return
+    window.location.hash = encodeURIComponent(state.seed)
+  }, [state.seed])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -156,10 +177,21 @@ export default function App() {
         </header>
 
         <div className="game-intro">
-          <p>同时移动 · 当前最高分 · 随时提交</p>
+          <p>
+            同时移动 · 当前最高分 · 随时提交
+            {state.history.length > 0 && (
+              <em className="progress-note"> · 已进行 {state.moves} 步，自动存档</em>
+            )}
+          </p>
           <div className="game-actions">
-            <button onClick={() => loadSeed(state.seed)}><RotateCcw />重开</button>
-            <button onClick={() => setShowRules(true)}><HelpCircle />规则</button>
+            <button onClick={() => loadSeed(state.seed)} title="用同一种子重开" aria-label="用同一种子重开">
+              <RotateCcw />
+              <span>重开</span>
+            </button>
+            <button onClick={() => setShowRules(true)} title="查看规则" aria-label="查看规则">
+              <HelpCircle />
+              <span>规则</span>
+            </button>
             <button onClick={() => setSound((value) => !value)} aria-label={soundEnabled ? '关闭声音' : '开启声音'}>
               {soundEnabled ? <Volume2 /> : <VolumeX />}
             </button>
@@ -177,8 +209,11 @@ export default function App() {
               maxLength={32}
               spellCheck={false}
             />
-            <button type="submit">载入</button>
-            <button type="button" onClick={() => loadSeed(freshSeed())}><Dices />新种子</button>
+            <button type="submit" title="载入该种子" aria-label="载入该种子">载入</button>
+            <button type="button" onClick={() => loadSeed(freshSeed())} title="随机新种子" aria-label="随机新种子">
+              <Dices />
+              <span>新种子</span>
+            </button>
           </form>
         </details>
 
