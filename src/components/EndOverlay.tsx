@@ -22,7 +22,7 @@ export function EndOverlay({ state, bestScore, onRestart }: EndOverlayProps) {
         <div className="result-grid problem-results">
           {state.boards.map((board) => (
             <div key={board.id}>
-              <span>Problem {board.label}</span>
+              <span>{board.label}</span>
               <b>{formatScore(board.submittedScore ?? 0)}</b>
             </div>
           ))}

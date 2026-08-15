@@ -36,7 +36,6 @@ export interface ProblemBoard {
   pieces: BoardPiece[]
   currentScore: number
   submittedScore?: number
-  autoSubmitted?: boolean
 }
 
 export interface PieceMotion {

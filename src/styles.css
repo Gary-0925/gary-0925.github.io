@@ -58,9 +58,9 @@ button:focus-visible { outline: 3px solid rgba(143, 122, 102, .35); outline-offs
 .boards-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 16px; }
 .problem-board { min-width: 0; }
 .problem-board > header { height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 0 2px; }
-.problem-board > header > b { color: var(--text); font-size: .8rem; font-weight: 800; }
+.problem-board > header > b { flex: none; color: var(--text); font: 800 .78rem 'IBM Plex Mono', monospace; letter-spacing: -.02em; white-space: nowrap; }
 .problem-board > header > div { display: flex; align-items: center; gap: 7px; }
-.problem-board > header span { color: var(--muted); font: 700 .7rem 'IBM Plex Mono', monospace; }
+.problem-board > header span { color: var(--muted); font: 700 .7rem 'IBM Plex Mono', monospace; white-space: nowrap; }
 .problem-board > header button { height: 27px; padding: 0 9px; border: 0; border-radius: 3px; background: var(--button); color: white; font-size: .63rem; font-weight: 700; cursor: pointer; }
 .problem-board > header button:disabled { opacity: .35; cursor: default; }
 .problem-board.status-submitted > header span { color: #9a7538; }
@@ -169,7 +169,7 @@ button:focus-visible { outline: 3px solid rgba(143, 122, 102, .35); outline-offs
   .app { padding-left: 6px; padding-right: 6px; }
   .game-header, .game-intro, .seed-panel, .status-line, .how-to-play { margin-left: 4px; margin-right: 4px; }
   .score-group > div { min-width: 61px; }
-  .problem-board > header > b { font-size: .62rem; }
+  .problem-board > header > b { font-size: .6rem; }
   .problem-board > header span { font-size: .54rem; }
   .problem-board > header button { padding: 0 6px; font-size: .54rem; }
   .subtask-key { gap: 2px; height: 28px; }

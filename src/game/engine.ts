@@ -20,7 +20,7 @@ interface RandomContext {
   nextId: number
 }
 
-const BOARD_LABELS = ['A', 'B', 'C', 'D', 'E', 'F']
+const BOARD_LABELS = ['D1T1', 'D1T2', 'D1T3', 'D2T1', 'D2T2', 'D2T3']
 const SUBTASK_SCORES = [10, 20, 30, 40, 50, 60, 70, 80, 90]
 
 function hashSeed(seed: string) {
@@ -457,7 +457,7 @@ export function moveBoard(current: GameState, direction: Direction): GameState {
   state.spawnedPieceIds = []
   state.moves += 1
   let totalMerges = 0
-  const autoSubmitted: string[] = []
+  const stuck: string[] = []
 
   state.boards.forEach((board, index) => {
     const plan = plans[index]
@@ -475,25 +475,19 @@ export function moveBoard(current: GameState, direction: Direction): GameState {
     if (spawnedId) state.spawnedPieceIds.push(spawnedId)
     refreshBoardScore(board)
 
-    if (!spawnedId || isBoardFull(board) || !hasAnyMove(board)) {
-      board.status = 'submitted'
-      board.submittedScore = board.currentScore
-      board.autoSubmitted = true
-      autoSubmitted.push(board.label)
-    }
+    if (isBoardFull(board) && !hasAnyMove(board)) stuck.push(board.label)
   })
 
   refreshContest(state)
   state.lastEvent = totalMerges > 0 ? 'merge' : 'move'
   const parts: string[] = []
   if (totalMerges) parts.push(`合并 ${totalMerges} 次`)
-  if (autoSubmitted.length) parts.push(`${autoSubmitted.join('、')} 题自动提交`)
+  if (stuck.length) parts.push(`${stuck.join('、')} 已无法移动，可手动提交`)
   setMessage(
     state,
     parts.length ? parts.join('；') : '六题继续评测。',
-    autoSubmitted.length ? 'warn' : totalMerges ? 'good' : 'neutral',
+    stuck.length ? 'warn' : totalMerges ? 'good' : 'neutral',
   )
-  finishIfComplete(state)
   return state
 }
 
@@ -507,10 +501,9 @@ export function submitBoard(current: GameState, boardId: string): GameState {
   refreshBoardScore(board)
   board.status = 'submitted'
   board.submittedScore = board.currentScore
-  board.autoSubmitted = false
   state.lastEvent = 'submit'
   refreshContest(state)
-  setMessage(state, `${board.label} 题已提交：${board.submittedScore} 分。`, board.submittedScore > 0 ? 'good' : 'warn')
+  setMessage(state, `${board.label} 已提交：${board.submittedScore} 分。`, board.submittedScore > 0 ? 'good' : 'warn')
   finishIfComplete(state)
   return state
 }

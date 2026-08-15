@@ -44,7 +44,6 @@ function isolatedState(pieces: BoardPiece[]): GameState {
     board.status = index === 0 ? 'active' : 'submitted'
     board.currentScore = 0
     board.submittedScore = index === 0 ? undefined : 0
-    board.autoSubmitted = false
   })
   state.motion = []
   state.spawnedPieceIds = []
@@ -242,7 +241,6 @@ describe('AKNOI seeded engine', () => {
       status: 'submitted',
       currentScore: 40,
       submittedScore: 40,
-      autoSubmitted: false,
     })
     const snapshot = structuredClone(submitted.boards[0].pieces)
     const moved = moveBoard(submitted, 'left')
@@ -250,7 +248,7 @@ describe('AKNOI seeded engine', () => {
     expect(moved.boards[0].submittedScore).toBe(40)
   })
 
-  it('automatically submits a full board at its current maximum', () => {
+  it('never submits a board on its own, even when it fills up', () => {
     const pieces: BoardPiece[] = []
     for (let row = 0; row < 6; row += 1) {
       for (let col = 0; col < 6; col += 1) {
@@ -261,11 +259,38 @@ describe('AKNOI seeded engine', () => {
     const state = isolatedState(pieces)
     state.boards[0].currentScore = 5
     const moved = moveBoard(state, 'right')
-    expect(activeBoard(moved)).toMatchObject({
-      status: 'submitted',
-      submittedScore: 5,
-      autoSubmitted: true,
-    })
+    expect(activeBoard(moved)).toMatchObject({ status: 'active' })
+    expect(activeBoard(moved).submittedScore).toBeUndefined()
+    expect(moved.screen).toBe('playing')
+  })
+
+  it('keeps a locked board playable until the player submits it', () => {
+    const pieces: BoardPiece[] = []
+    for (let row = 0; row < 6; row += 1) {
+      for (let col = 0; col < 6; col += 1) {
+        pieces.push(piece('single-50', 5 + ((row + col) % 2), row, col))
+      }
+    }
+    const state = isolatedState(pieces)
+    for (const direction of ['left', 'right', 'up', 'down'] as const) {
+      const moved = moveBoard(state, direction)
+      expect(activeBoard(moved).status).toBe('active')
+      expect(moved.screen).toBe('playing')
+    }
+    const submitted = submitBoard(state, state.boards[0].id)
+    expect(submitted.boards[0]).toMatchObject({ status: 'submitted', submittedScore: 50 })
+    expect(submitted.screen).toBe('finished')
+  })
+
+  it('labels the six problems D1T1 through D2T3', () => {
+    expect(startGame('LABELS').boards.map((board) => board.label)).toEqual([
+      'D1T1',
+      'D1T2',
+      'D1T3',
+      'D2T1',
+      'D2T2',
+      'D2T3',
+    ])
   })
 
   it('keeps all generated and moved pieces in bounds without overlap', () => {
