@@ -32,10 +32,7 @@ button:focus-visible { outline: 3px solid rgba(143, 122, 102, .35); outline-offs
 .score-group span { display: block; color: #eee4da; font-size: .61rem; font-weight: 700; }
 .score-group strong { display: block; margin-top: 1px; font: 700 .92rem 'IBM Plex Mono', monospace; }
 
-.game-intro { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.game-intro p { margin: 0; color: var(--muted); font-size: .72rem; }
-.game-intro b { color: #66594f; }
-.progress-note { color: #9a8f84; font-size: .64rem; font-style: normal; }
+.game-intro { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 8px; }
 .game-actions { display: flex; gap: 6px; }
 .game-actions button { height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 3px; background: var(--button); color: #f9f6f2; font-size: .66rem; font-weight: 700; cursor: pointer; }
 .game-actions button:last-child { width: 30px; padding: 0; }
@@ -150,7 +147,6 @@ button:focus-visible { outline: 3px solid rgba(143, 122, 102, .35); outline-offs
   .title-block p { font-size: .58rem; }
   .score-group > div { min-width: 64px; padding: 5px 8px; }
   .score-group strong { font-size: .82rem; }
-  .game-intro p { font-size: .66rem; line-height: 1.45; }
   .game-actions button { width: 30px; padding: 0; }
   .game-actions button:not(:last-child) > span { display: none; }
   .seed-control { grid-template-columns: minmax(80px, 1fr) auto auto; padding: 5px; }

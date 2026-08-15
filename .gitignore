@@ -5,3 +5,6 @@ dist/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+
+# 服务端本地配置（含密钥，不入库）
+api/config.local.php

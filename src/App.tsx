@@ -65,6 +65,17 @@ function initialState(): GameState {
   return startGame(hashSeed || freshSeed())
 }
 
+/**
+ * True when the keyboard event belongs to an editable control, so the global
+ * WASD shortcuts must stay out of the way.
+ */
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
 function soundForState(previous: GameState, next: GameState) {
   if (next === previous || next.eventId === previous.eventId) return
   if (next.lastEvent === 'merge') playSound('chain')
@@ -145,6 +156,9 @@ export default function App() {
         if (event.key === 'Escape') setShowRules(false)
         return
       }
+      // Never steal keys from a text field: the seed box needs W/A/S/D too.
+      if (isTypingTarget(event.target)) return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
       if (state.screen !== 'playing') return
       const keys: Record<string, Direction> = {
         ArrowUp: 'up', w: 'up', W: 'up',
@@ -177,12 +191,6 @@ export default function App() {
         </header>
 
         <div className="game-intro">
-          <p>
-            同时移动 · 当前最高分 · 随时提交
-            {state.history.length > 0 && (
-              <em className="progress-note"> · 已进行 {state.moves} 步，自动存档</em>
-            )}
-          </p>
           <div className="game-actions">
             <button onClick={() => loadSeed(state.seed)} title="用同一种子重开" aria-label="用同一种子重开">
               <RotateCcw />
