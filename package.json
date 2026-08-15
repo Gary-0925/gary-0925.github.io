@@ -15,6 +15,9 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@php-wasm/node": "^3.1.49",
+    "@php-wasm/universal": "^3.1.49",
+    "@types/node": "^26.2.0",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "4.3.4",

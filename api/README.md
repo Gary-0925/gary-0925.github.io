@@ -1,135 +1,83 @@
-# AKNOI 排行榜 API
+# AKNOI 排行榜后端
 
-部署在 `aknoi.page.gd/api/` 下的 PHP 接口，复用同站 `../db/db.php` 里已有的 `$db`（`dataBase` 实例）。
+用户在游戏里导出 `.dat` 存档，然后到 `submit.php` 手动上传；服务端**重放整局操作、自己算出分数**后才记入排行榜。
+
+没有 JSON API，也没有自动提交。全是普通网页表单。
+
+## 为什么是网页表单而不是 API
+
+InfinityFree 免费主机会对所有请求做浏览器校验（要求客户端能执行 JS 并带上 `__test` cookie）。
+curl、脚本、跨域 `fetch` 一律会拿到 403 或一段挑战页，免费版关不掉也绕不过。
+做成普通网页后，请求全部由浏览器自己发出，天然满足这套校验。
+
+## 部署
+
+1. 把整个 `api/` 目录传到 `htdocs/api/`。
+2. 复制 `config.local.example.php` 为 `config.local.php`，填好 `install_token` 和 `ip_salt`：
+
+   ```bash
+   php -r 'echo bin2hex(random_bytes(24)), "\n";'
+   ```
+
+   `config.local.php` 已在 `.gitignore` 里，不会进仓库。
+3. 确认 `db/db.php` 存在（提供全局 `$db`，`api/lib.php` 会 `require` 它）。
+4. 浏览器访问 `https://你的域名/api/install.php?token=你的令牌` 建表。
+5. **建完表后删掉 `install.php`。**
+6. 打开 `https://你的域名/api/submit.php` 试传一个存档。
 
 ## 文件
 
 | 文件 | 作用 |
 | --- | --- |
-| `config.php` | 默认配置。**不含密钥**，可以进仓库。 |
-| `config.local.example.php` | 本地配置模板，复制成 `config.local.php` 后填密钥。 |
-| `lib.php` | 公共库：CORS、JSON 响应、参数校验、限流、回放指纹。 |
-| `install.php` | 一次性建表脚本，建完请删掉。 |
-| `submit.php` | `POST` 提交成绩。 |
-| `leaderboard.php` | `GET` 读排行榜。 |
-| `replay.php` | `GET` 取某条成绩的完整操作序列。 |
+| `submit.php` | 上传页面。接收 `.dat`，重算分数，写库。 |
+| `leaderboard.php` | 排行榜页面。支持按种子筛选、翻页、只看个人最好成绩。 |
+| `engine.php` | 游戏引擎的 PHP 移植，和前端 `src/game/engine.ts` 逐位一致。 |
+| `lib.php` | 配置、存档解析、限流、页面外壳。 |
+| `config.php` | 默认配置（不含密钥）。 |
+| `config.local.php` | 本地密钥配置，不进仓库。 |
+| `install.php` | 一次性建表，用完删掉。 |
 
-## 部署步骤
+## 校验做了什么
 
-1. 把 `api/` 整个目录上传到网站根目录下，使其成为 `aknoi.page.gd/api/`。
-   确认 `../db/db.php` 存在（即 `aknoi.page.gd/db/db.php`）。
-2. 复制 `config.local.example.php` 为 `config.local.php`，填入 `install_token` 和 `ip_salt`。
-3. 浏览器访问 `https://aknoi.page.gd/api/install.php?token=你的令牌` 建表。
-4. 看到「表已就绪」后，**删除 `install.php`**。
+`submit.php` 收到文件后依次做：
 
-> `config.local.php` 已加入 `.gitignore`。另外你贴出来的 `db.php` 里带着明文数据库密码，
-> 那份文件不要提交到公开仓库；密码既然已经出现在聊天里，建议去控制面板改一次。
+1. CSRF 令牌、名字非空且不超长。
+2. 文件大小 ≤ `max_body_bytes`，且确实是上传上来的临时文件。
+3. 解析 JSON，检查 `format` / `version` / `seed` 格式 / 每一个操作的合法性。
+4. 限流：同一 IP（加盐哈希后存储）在 `rate_window` 秒内最多传 `rate_limit` 次。
+5. **用 `engine.php` 从种子开始重放整个操作序列，算出真实分数。**
+6. 拿重算结果和文件里写的 `score` 对账，差超过 0.05 就拒绝。
+7. 要求这一局真的打完了（六道题全部提交）。
+8. 按「种子 + 操作序列」算指纹，唯一索引保证同一局只上榜一次。
 
-## 接口
+入库的分数**永远是服务端算出来的那个**，不是文件里写的那个。
 
-### POST `/api/submit.php`
+改 `.dat` 里的 `score` 没有意义。想刷分只能真的构造出一个能跑出高分的操作序列，
+而那和正常打一局是一回事。
 
-```json
-{
-  "name": "Gary",
-  "seed": "K3X9ZQ1",
-  "score": 428.6,
-  "durationMs": 512340,
-  "actions": [
-    { "type": "move", "direction": "left" },
-    { "type": "submit", "boardId": "problem-D1T2" }
-  ]
-}
+## 引擎一致性
+
+`engine.php` 是 `src/game/engine.ts` 的逐行移植，两边必须在同一 `seed + actions` 下算出完全相同的分数，
+否则诚实玩家会被当成作弊。
+
+移植时需要注意 JS 和 PHP 的语义差异，`engine.php` 里都做了处理：
+
+- `Math.imul` → `aknoi_imul()`，拆成 16 位分块相乘，避免 PHP 整数溢出成 float。
+- `>>> 0` → `aknoi_u32()`。
+- `Math.round` → `aknoi_js_round()`，JS 是 `floor(x + 0.5)`，PHP 的 `round()` 对 .5 的处理不一样。
+- `charCodeAt` → `aknoi_utf16_units()`，按 UTF-16 码元取值，非 ASCII 种子才不会算错。
+- `Array.prototype.sort` → `aknoi_stable_sort()`，带原索引比较，不依赖 PHP 版本的排序稳定性。
+
+一致性由 `src/game/phpEngine.parity.test.ts` 保证：它启动一个真的 PHP 8.3（php-wasm），
+用同样的种子和操作序列同时跑 TS 和 PHP 两边，逐项比对总分、步数、每题分数和开局棋盘。
+
+```bash
+npm test
 ```
 
-返回 `201`：
+## 已知的坑
 
-```json
-{ "ok": true, "id": 42, "score": 428.6, "moves": 137, "rank": 3, "best": 428.6, "duplicate": false }
-```
-
-同一份回放（种子 + 操作序列完全一致）重复提交不会新增记录，返回原记录且 `duplicate: true`。
-
-### GET `/api/leaderboard.php`
-
-| 参数 | 说明 |
-| --- | --- |
-| `limit` | 每页条数，1–100，默认 20 |
-| `offset` | 偏移量，默认 0 |
-| `seed` | 只看某个种子的榜单 |
-| `scope` | `all`（默认，每局一行）或 `players`（每个昵称只留最好成绩） |
-| `name` | 附带查询这个昵称的名次，放在返回的 `me` 字段 |
-
-```json
-{
-  "ok": true, "scope": "all", "seed": null, "total": 128, "limit": 20, "offset": 0,
-  "entries": [
-    { "rank": 1, "id": 87, "name": "Gary", "seed": "K3X9ZQ1",
-      "score": 600, "moves": 214, "durationMs": 733000, "createdAt": "2026-08-15 11:02:31" }
-  ],
-  "me": { "name": "Gary", "best": 600, "rank": 1 }
-}
-```
-
-### GET `/api/replay.php?id=87`
-
-返回该局的 `actions` 数组，前端可以直接喂给 `replayGame(seed, actions)` 复现整局。
-
-## 错误格式
-
-所有失败都返回 `{ "ok": false, "error": "错误码", "message": "中文说明" }`，
-配合 HTTP 状态码：`400` 请求体问题、`404` 找不到、`405` 方法不对、
-`413` 体积过大、`422` 参数不合法、`429` 提交太频繁、`500` 服务端出错。
-
-## 两个已知的坑
-
-**1. `db.php` 关掉了模拟预处理。** `PDO::ATTR_EMULATE_PREPARES => false` 之下，
-`LIMIT ?` / `INTERVAL ? SECOND` 用占位符会被当字符串绑定而报语法错。
-所以分页和时间窗口的值都先经过 `(int)` 转换再内联进 SQL —— 这些值不来自用户拼接，
-是强制转成整数并夹在合法区间之后才拼的，没有注入面。其余所有用户输入一律走占位符。
-
-**2. InfinityFree 免费主机会拦截非浏览器请求。** 它的安全系统要求客户端能执行
-JavaScript 并保存 `__test` cookie，`curl`、Postman、服务器到服务器的调用通常会吃
-403 或拿到一段 HTML，官方明确说免费版绕不过去，只有付费版没有这个限制。
-从浏览器里的前端页面 `fetch` 是正常的，但要注意两点：cookie 得能带上，
-所以跨域请求建议加 `credentials: 'include'`；调试时别用 `curl` 测，
-测不通不代表代码有问题。如果想彻底避开，把 API 放到别的主机上。
-
-## 前端调用示例
-
-```ts
-const API = 'https://aknoi.page.gd/api'
-
-export async function submitScore(state: GameState, name: string) {
-  const res = await fetch(`${API}/submit.php`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      name,
-      seed: state.seed,
-      score: state.contestScore,
-      actions: state.history,
-    }),
-  })
-  if (!res.ok) throw new Error((await res.json()).message ?? '提交失败')
-  return res.json()
-}
-
-export async function fetchLeaderboard(limit = 20) {
-  const res = await fetch(`${API}/leaderboard.php?scope=players&limit=${limit}`, {
-    credentials: 'include',
-  })
-  return res.json()
-}
-```
-
-`state.history` 就是本地存档里那份操作序列，格式和 `submit.php` 要求的完全一致。
-
-## 关于作弊
-
-`submit.php` 只做**结构**校验（分数区间、操作合法性、长度上限、去重、限流），
-它不会重新跑一遍游戏去验证「这个分数确实由这串操作产生」。
-真要防刷分，得把 `src/game/engine.ts` 的推演逻辑用 PHP 重写一遍，
-在服务端 replay 后比对分数。存下来的 `actions` 字段就是为这件事留的余地 ——
-现在也可以先靠 `replay.php` 拉回放，在前端用现成的 `replayGame` 人工复核可疑成绩。
+- **`LIMIT ? / OFFSET ? / INTERVAL ? SECOND` 不能用占位符**。`db.php` 关了模拟预处理
+  （`EMULATE_PREPARES = false`），这些位置在原生预处理下会报错。代码里都是强转 `int` 后直接拼进 SQL。
+- **MySQL 5.7+ 默认开 `ONLY_FULL_GROUP_BY`**。「每人只留最好成绩」用 `NOT EXISTS` 实现，不要改成 `GROUP BY`。
+- **免费主机拦截非浏览器请求**，所以别想着再加 JSON 接口，见开头。

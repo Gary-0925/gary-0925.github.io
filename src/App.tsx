@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUp,
   Dices,
+  Download,
   HelpCircle,
   RotateCcw,
   Volume2,
@@ -15,6 +16,7 @@ import { EndOverlay } from './components/EndOverlay'
 import { GameBoard } from './components/GameBoard'
 import { RulesModal } from './components/RulesModal'
 import { playSound, setSoundEnabled } from './game/audio'
+import { downloadReplay } from './game/replayFile'
 import { finishAnimation, moveBoard, replayGame, startGame, submitBoard } from './game/engine'
 import {
   clearSavedGame,
@@ -114,6 +116,18 @@ export default function App() {
     playSound('paper')
   }, [])
 
+  const exportReplay = useCallback(() => {
+    if (state.history.length === 0) return
+    const name = downloadReplay(state)
+    setState((current) => ({
+      ...current,
+      message: `已导出 ${name}，可上传到排行榜。`,
+      messageTone: 'good',
+      eventId: current.eventId + 1,
+    }))
+    playSound('paper')
+  }, [state])
+
   const submitSeed = (event: FormEvent) => {
     event.preventDefault()
     loadSeed(seedInput)
@@ -200,6 +214,15 @@ export default function App() {
               <HelpCircle />
               <span>规则</span>
             </button>
+            <button
+              onClick={exportReplay}
+              disabled={state.history.length === 0}
+              title="导出本局为 .dat 存档文件"
+              aria-label="导出本局为 .dat 存档文件"
+            >
+              <Download />
+              <span>导出</span>
+            </button>
             <button onClick={() => setSound((value) => !value)} aria-label={soundEnabled ? '关闭声音' : '开启声音'}>
               {soundEnabled ? <Volume2 /> : <VolumeX />}
             </button>
@@ -278,7 +301,7 @@ export default function App() {
 
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
       {state.screen === 'finished' && state.motion.length === 0 && (
-        <EndOverlay state={state} bestScore={Math.max(bestScore, state.contestScore)} onRestart={() => loadSeed(state.seed)} />
+        <EndOverlay state={state} bestScore={Math.max(bestScore, state.contestScore)} onRestart={() => loadSeed(state.seed)} onExport={exportReplay} />
       )}
     </div>
   )

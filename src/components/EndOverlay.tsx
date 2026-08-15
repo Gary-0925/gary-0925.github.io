@@ -1,17 +1,18 @@
-import { RotateCcw, Trophy } from 'lucide-react'
+import { Download, RotateCcw, Trophy } from 'lucide-react'
 import type { GameState } from '../game/types'
 
 interface EndOverlayProps {
   state: GameState
   bestScore: number
   onRestart: () => void
+  onExport: () => void
 }
 
 function formatScore(score: number) {
   return Number.isInteger(score) ? String(score) : score.toFixed(1)
 }
 
-export function EndOverlay({ state, bestScore, onRestart }: EndOverlayProps) {
+export function EndOverlay({ state, bestScore, onRestart, onExport }: EndOverlayProps) {
   return (
     <div className="end-backdrop">
       <section className="end-card">
@@ -28,7 +29,11 @@ export function EndOverlay({ state, bestScore, onRestart }: EndOverlayProps) {
           ))}
         </div>
         <p className="record-line">种子 {state.seed} · 纪录 {formatScore(bestScore)}/600 · {state.moves} 次操作</p>
-        <button className="primary-button" onClick={onRestart}><RotateCcw /> 同种子再赛</button>
+        <div className="end-buttons">
+          <button className="primary-button" onClick={onExport}><Download /> 导出 .dat</button>
+          <button className="ghost-button" onClick={onRestart}><RotateCcw /> 同种子再赛</button>
+        </div>
+        <p className="end-hint">下载后到排行榜页面上传这个文件，服务器会重算分数。</p>
       </section>
     </div>
   )

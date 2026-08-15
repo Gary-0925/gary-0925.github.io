@@ -26,29 +26,20 @@ $defaults = [
     // 用来给 IP 加盐哈希，避免数据库里存明文 IP。随便一串长随机字符串即可。
     'ip_salt' => '',
 
-    // 允许跨域读写的前端来源。带上协议，不要带结尾斜杠。
-    'allowed_origins' => [
-        'https://aknoi.page.gd',
-        'http://aknoi.page.gd',
-        'https://gary-0925.github.io',
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-    ],
-
     // 单局最高分（六题 × 100）。超过这个分数的提交一律拒绝。
     'max_score' => 600.0,
 
-    // 一局最多允许多少个操作，防止有人塞一个几百万步的回放把库撑爆。
+    // 一局最多允许多少个操作，防止有人塞一个几百万步的回放把服务器算到超时。
     'max_actions' => 20000,
 
     // 玩家昵称长度（按字符数计，中文算 1 个）。
     'max_name_length' => 24,
 
-    // 限流：同一 IP 在 rate_window 秒内最多提交 rate_limit 次。
+    // 限流：同一 IP 在 rate_window 秒内最多上传 rate_limit 次。
     'rate_window' => 600,
     'rate_limit' => 12,
 
-    // 单次请求体上限（字节）。
+    // 上传的 .dat 文件大小上限（字节）。
     'max_body_bytes' => 262144,
 
     // 排行榜单页最多返回多少条。

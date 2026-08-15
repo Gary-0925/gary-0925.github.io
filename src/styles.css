@@ -139,6 +139,11 @@ button:focus-visible { outline: 3px solid rgba(143, 122, 102, .35); outline-offs
 .record-line { margin-bottom: 16px !important; font: .6rem 'IBM Plex Mono', monospace; }
 .primary-button { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 15px; border: 0; border-radius: 3px; background: var(--button); color: white; font-size: .68rem; font-weight: 700; cursor: pointer; }
 .primary-button svg { width: 15px; }
+.end-buttons { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.ghost-button { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 15px; border: 1px solid #cdc2b4; border-radius: 3px; background: transparent; color: #6d6156; font-size: .68rem; font-weight: 700; cursor: pointer; }
+.ghost-button svg { width: 15px; }
+.ghost-button:hover { background: #efe7dd; }
+.end-hint { margin: 8px 0 0; color: var(--muted); font-size: .6rem; }
 
 @media (max-width: 760px) {
   .app { padding: 14px 10px 26px; }

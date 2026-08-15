@@ -33,20 +33,20 @@ $table = scores_table();
 $sql = <<<SQL
 CREATE TABLE IF NOT EXISTS `{$table}` (
     id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    player_name  VARCHAR(32)      NOT NULL,
+    name         VARCHAR(32)      NOT NULL,
     seed         VARCHAR(32)      NOT NULL,
     score        DECIMAL(5,1)     NOT NULL DEFAULT 0.0,
     moves        INT UNSIGNED     NOT NULL DEFAULT 0,
-    duration_ms  INT UNSIGNED     NOT NULL DEFAULT 0,
+    action_count INT UNSIGNED     NOT NULL DEFAULT 0,
     actions      MEDIUMTEXT       NOT NULL,
     replay_hash  CHAR(64)         NOT NULL,
     ip_hash      CHAR(64)         NOT NULL DEFAULT '',
     created_at   DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uniq_replay (replay_hash),
-    KEY idx_board (score DESC, moves ASC, created_at ASC),
+    KEY idx_board (score DESC, moves ASC, id ASC),
     KEY idx_seed (seed, score DESC),
-    KEY idx_player (player_name, score DESC),
+    KEY idx_name (name, score DESC),
     KEY idx_rate (ip_hash, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL;

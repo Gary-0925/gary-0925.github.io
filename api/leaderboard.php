@@ -1,142 +1,158 @@
 <?php
 /**
- * GET /api/leaderboard.php
+ * 排行榜页面。
  *
- * 查询参数：
- *   limit   每页条数，1–100，默认 20
- *   offset  偏移量，默认 0
- *   seed    只看某个种子的榜单（可选）
- *   scope   all（默认，每条记录一行）| players（同一昵称只保留其最好成绩）
- *   name    查这个昵称的名次和最好成绩（可选）
- *
- * 返回 { ok:true, total, limit, offset, entries:[...], me:{...}|null }
+ * 同样是普通网页而不是 JSON 接口：免费主机会拦截非浏览器请求，
+ * 直接渲染 HTML 才能保证谁都打得开。
  */
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/lib.php';
 
-send_cors_headers('GET');
-require_method('GET');
-
+$pageSize = 20;
 $maxPageSize = (int) cfg('max_page_size', 100);
-
-// 分页参数必须先转成 int 再拼进 SQL：db.php 关掉了 EMULATE_PREPARES，
-// LIMIT/OFFSET 用占位符会被当成字符串而报语法错。
-$limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 20;
-$limit = max(1, min($maxPageSize, $limit));
-
-$offset = isset($_GET['offset']) ? (int) $_GET['offset'] : 0;
-$offset = max(0, min(1000000, $offset));
-
-$scope = ($_GET['scope'] ?? 'all') === 'players' ? 'players' : 'all';
-
-$seed = isset($_GET['seed']) ? trim((string) $_GET['seed']) : '';
-if ($seed !== '' && preg_match('/^[A-Za-z0-9_-]{1,32}$/', $seed) !== 1) {
-    fail(422, 'bad_seed', '种子参数不合法。');
+if ($pageSize > $maxPageSize) {
+    $pageSize = $maxPageSize;
 }
 
-$name = isset($_GET['name']) ? clean_name((string) $_GET['name']) : '';
-if (mb_strlen($name, 'UTF-8') > (int) cfg('max_name_length', 24)) {
-    $name = '';
+$page = max(1, (int) ($_GET['page'] ?? 1));
+$page = min($page, 500);
+$offset = ($page - 1) * $pageSize;
+
+// 只按种子筛选，值先过白名单再用占位符传进去。
+$seedFilter = trim((string) ($_GET['seed'] ?? ''));
+if ($seedFilter !== '' && preg_match('/^[A-Za-z0-9_-]{1,32}$/', $seedFilter) !== 1) {
+    $seedFilter = '';
 }
+
+// 每人只留最好的一条。MySQL 5.7 起默认开 ONLY_FULL_GROUP_BY，
+// 这里用 NOT EXISTS 而不是 GROUP BY，避免 SQL 模式差异。
+$bestOnly = ($_GET['scope'] ?? 'best') !== 'all';
 
 $table = scores_table();
+$where = [];
+$params = [];
+
+if ($seedFilter !== '') {
+    $where[] = 's.seed = ?';
+    $params[] = $seedFilter;
+}
+if ($bestOnly) {
+    $where[] = 'NOT EXISTS (SELECT 1 FROM `' . $table . '` b WHERE b.name = s.name'
+        . ($seedFilter !== '' ? ' AND b.seed = s.seed' : '')
+        . ' AND (b.score > s.score OR (b.score = s.score AND b.id < s.id)))';
+}
+
+$whereSql = $where === [] ? '' : ' WHERE ' . implode(' AND ', $where);
+
+$rows = [];
+$total = 0;
+$error = null;
 
 try {
-    $where = '';
-    $params = [];
-    if ($seed !== '') {
-        $where = ' WHERE seed = ?';
-        $params[] = $seed;
-    }
+    $countRow = $db->query(
+        'SELECT COUNT(*) AS total FROM `' . $table . '` s' . $whereSql,
+        $params
+    )->fetch();
+    $total = (int) ($countRow['total'] ?? 0);
 
-    if ($scope === 'players') {
-        // 每个昵称只保留最好的一条。这里用 NOT EXISTS 而不是 GROUP BY，
-        // 因为 MySQL 5.7+ 默认开着 ONLY_FULL_GROUP_BY，
-        // 「GROUP BY 昵称却又 SELECT 其它列」会直接报错。
-        // 条件读作：不存在同名玩家的另一条成绩比这条更好（分数更高，
-        // 或分数相同但 id 更小），于是每个昵称恰好命中一行。
-        $totalSql = 'SELECT COUNT(DISTINCT player_name) AS total FROM `' . $table . '`' . $where;
-
-        $seedFilter = $seed !== '' ? ' AND x.seed = ?' : '';
-        $listSql =
-            'SELECT s.id, s.player_name, s.seed, s.score, s.moves, s.duration_ms, s.created_at'
-            . ' FROM `' . $table . '` AS s'
-            . ' WHERE ' . ($seed !== '' ? 's.seed = ? AND ' : '')
-            . 'NOT EXISTS ('
-            . '   SELECT 1 FROM `' . $table . '` AS x'
-            . '   WHERE x.player_name = s.player_name' . $seedFilter
-            . '     AND (x.score > s.score OR (x.score = s.score AND x.id < s.id))'
-            . ' )'
-            . ' ORDER BY s.score DESC, s.moves ASC, s.created_at ASC'
-            . ' LIMIT ' . $limit . ' OFFSET ' . $offset;
-
-        // seed 在外层和子查询各出现一次，参数要给两份。
-        $listParams = array_merge($params, $params);
-    } else {
-        $totalSql = 'SELECT COUNT(*) AS total FROM `' . $table . '`' . $where;
-
-        $listSql =
-            'SELECT id, player_name, seed, score, moves, duration_ms, created_at'
-            . ' FROM `' . $table . '`' . $where
-            . ' ORDER BY score DESC, moves ASC, created_at ASC'
-            . ' LIMIT ' . $limit . ' OFFSET ' . $offset;
-
-        $listParams = $params;
-    }
-
-    $totalRow = $db->query($totalSql, $params)->fetch();
-    $total = (int) ($totalRow['total'] ?? 0);
-
-    $rows = $db->query($listSql, $listParams)->fetchAll();
-
-    $entries = [];
-    foreach ($rows as $index => $row) {
-        $entries[] = [
-            'rank' => $offset + $index + 1,
-            'id' => (int) $row['id'],
-            'name' => (string) $row['player_name'],
-            'seed' => (string) $row['seed'],
-            'score' => round((float) $row['score'], 1),
-            'moves' => (int) $row['moves'],
-            'durationMs' => (int) $row['duration_ms'],
-            'createdAt' => (string) $row['created_at'],
-        ];
-    }
-
-    $me = null;
-    if ($name !== '') {
-        $meRow = $db->query(
-            'SELECT MAX(score) AS best FROM `' . $table . '` WHERE player_name = ?',
-            [$name]
-        )->fetch();
-
-        if ($meRow !== false && $meRow['best'] !== null) {
-            $best = round((float) $meRow['best'], 1);
-            $rankRow = $db->query(
-                'SELECT COUNT(*) + 1 AS rank_position FROM `' . $table . '` WHERE score > ?',
-                [$best]
-            )->fetch();
-            $me = [
-                'name' => $name,
-                'best' => $best,
-                'rank' => (int) ($rankRow['rank_position'] ?? 0),
-            ];
-        }
-    }
-
-    respond(200, [
-        'ok' => true,
-        'scope' => $scope,
-        'seed' => $seed !== '' ? $seed : null,
-        'total' => $total,
-        'limit' => $limit,
-        'offset' => $offset,
-        'entries' => $entries,
-        'me' => $me,
-    ]);
-} catch (PDOException $exception) {
-    error_log('[aknoi] leaderboard failed: ' . $exception->getMessage());
-    fail(500, 'server_error', '读取排行榜时出错，请稍后再试。');
+    // LIMIT / OFFSET 在原生预处理下不能用占位符，所以强转 int 后内插。
+    $rows = $db->query(
+        'SELECT s.id, s.name, s.seed, s.score, s.moves, s.created_at'
+        . ' FROM `' . $table . '` s' . $whereSql
+        . ' ORDER BY s.score DESC, s.moves ASC, s.id ASC'
+        . ' LIMIT ' . (int) $pageSize . ' OFFSET ' . (int) $offset,
+        $params
+    )->fetchAll();
+} catch (Throwable $throwable) {
+    error_log('[aknoi] leaderboard failed: ' . $throwable->getMessage());
+    $error = '排行榜暂时读不出来，请稍后再试。';
 }
+
+$totalPages = $total > 0 ? (int) ceil($total / $pageSize) : 1;
+
+/** 保留当前筛选条件的翻页链接。 */
+function page_link(int $page, string $seed, bool $bestOnly): string
+{
+    $query = ['page' => $page];
+    if ($seed !== '') {
+        $query['seed'] = $seed;
+    }
+    if (!$bestOnly) {
+        $query['scope'] = 'all';
+    }
+    return '?' . http_build_query($query);
+}
+
+ob_start();
+?>
+<h1>排行榜</h1>
+<p class="sub">
+  <?= $bestOnly ? '每位选手只显示最好成绩' : '显示全部记录' ?>
+  <?php if ($seedFilter !== ''): ?>· 种子 <code><?= e($seedFilter) ?></code><?php endif; ?>
+  · 共 <?= $total ?> 条
+</p>
+
+<?php if ($error !== null): ?>
+<div class="msg bad"><?= e($error) ?></div>
+<?php endif; ?>
+
+<form class="card" method="get">
+  <label for="seed">按种子筛选</label>
+  <input type="text" id="seed" name="seed" maxlength="32" placeholder="留空看全部种子"
+         value="<?= e($seedFilter) ?>">
+  <label style="margin-top:12px; font-weight:400">
+    <input type="checkbox" name="scope" value="all" style="width:auto"
+           <?= $bestOnly ? '' : 'checked' ?>>
+    显示每个人的全部记录（默认只看个人最好成绩）
+  </label>
+  <button type="submit">筛选</button>
+</form>
+
+<div class="card">
+<?php if ($rows === []): ?>
+  <p class="empty">还没有成绩，<a href="submit.php">来上传第一个</a>。</p>
+<?php else: ?>
+  <table>
+    <thead>
+      <tr>
+        <th class="rank">#</th>
+        <th>选手</th>
+        <th>种子</th>
+        <th class="num">分数</th>
+        <th class="num">步数</th>
+        <th>时间</th>
+      </tr>
+    </thead>
+    <tbody>
+      <?php foreach ($rows as $index => $row): ?>
+      <tr>
+        <td class="rank"><?= $offset + $index + 1 ?></td>
+        <td><?= e((string) $row['name']) ?></td>
+        <td><code><?= e((string) $row['seed']) ?></code></td>
+        <td class="num"><strong><?= format_score((float) $row['score']) ?></strong></td>
+        <td class="num"><?= (int) $row['moves'] ?></td>
+        <td class="note"><?= e(substr((string) $row['created_at'], 0, 16)) ?></td>
+      </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+
+  <?php if ($totalPages > 1): ?>
+  <p class="pager">
+    <?php if ($page > 1): ?>
+    <a href="<?= e(page_link($page - 1, $seedFilter, $bestOnly)) ?>">← 上一页</a>
+    <?php endif; ?>
+    <span class="note">第 <?= $page ?> / <?= $totalPages ?> 页</span>
+    <?php if ($page < $totalPages): ?>
+    <a href="<?= e(page_link($page + 1, $seedFilter, $bestOnly)) ?>">下一页 →</a>
+    <?php endif; ?>
+  </p>
+  <?php endif; ?>
+<?php endif; ?>
+</div>
+
+<p class="note"><a href="submit.php">上传我的成绩 →</a></p>
+<?php
+render_page('排行榜', (string) ob_get_clean());
