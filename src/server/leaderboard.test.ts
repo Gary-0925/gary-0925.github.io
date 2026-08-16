@@ -6,11 +6,13 @@
  * a SQLite stand-in for the production db/db.php (which is deployment-specific
  * and not in this repository).
  *
- * Exercises the weekly-leaderboard contract:
+ * Exercises the two-board contract:
+ *   - 周榜 (index.php): current ISO week only, limited to this week's seed,
+ *     one row per account per week
+ *   - 总榜 (alltime.php): no seed limit, one row per account (all-time best)
  *   - accounts: register / login / logout, login required to upload
- *   - SQL stores only the best score: one row per account per ISO week,
- *     better uploads update the row in place, equal/worse uploads are rejected
- *   - the "show all records" scope is gone from the leaderboard page
+ *   - SQL stores only best scores: better uploads update the row in place,
+ *     equal/worse uploads are rejected; the "show all records" scope is gone
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -27,6 +29,9 @@ import type { Direction, GameAction } from '../game/types'
 
 const SERVER_DIR = fileURLToPath(new URL('../../server', import.meta.url))
 const DOCROOT = '/www'
+
+/** 测试用的“本周种子”，通过 config.local.php 注入。 */
+const WEEKLY_SEED = 'TESTWEEK1'
 
 /**
  * Stand-in for htdocs/db/db.php: SQLite backend + MySQL dialect translation.
@@ -131,6 +136,7 @@ const SERVER_PHP_FILES = [
   'lib.php',
   'install.php',
   'index.php',
+  'alltime.php',
   'submit.php',
   'login.php',
   'register.php',
@@ -139,9 +145,6 @@ const SERVER_PHP_FILES = [
 
 let php: PHP
 let handler: PHPRequestHandler
-
-/** alice 本周最好成绩所在种子（后面的种子筛选断言要用）。 */
-let aliceBestSeed: string | null = null
 
 /** Runs PHP code in the wasm runtime (used to inspect the SQLite db). */
 async function runPhp(code: string): Promise<string> {
@@ -298,12 +301,16 @@ beforeAll(async () => {
     php.writeFile(`/www/${file}`, readFileSync(`${SERVER_DIR}/${file}`, 'utf8'))
   }
 
-  // 部署方式：config.php 保持默认，config.local.php 覆盖令牌和盐。
+  // 部署方式：config.php 保持默认，config.local.php 覆盖令牌、盐和本周种子。
   php.writeFile('/www/config.php', readFileSync(`${SERVER_DIR}/config.php`, 'utf8'))
   php.writeFile(
     '/www/config.local.php',
     `<?php
-return ['install_token' => 'test-token', 'ip_salt' => 'test-salt'];
+return [
+    'install_token' => 'test-token',
+    'ip_salt' => 'test-salt',
+    'weekly_seed' => '${WEEKLY_SEED}',
+];
 `,
   )
 
@@ -333,17 +340,20 @@ describe('server leaderboard', () => {
     const res = await handler.request({ url: '/install.php?token=test-token' })
     expect(res.httpStatusCode).toBe(200)
     expect(res.text).toContain('账号表')
-    expect(res.text).toContain('成绩表')
+    expect(res.text).toContain('周榜表')
+    expect(res.text).toContain('总榜表')
 
     const legacy = await sqlRows(
       "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'aknoi_scores_legacy_%'",
     )
     expect(legacy.length).toBe(1)
 
-    const users = await sqlRows(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='aknoi_users'",
-    )
-    expect(users.length).toBe(1)
+    for (const table of ['aknoi_users', 'aknoi_alltime']) {
+      const found = await sqlRows(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`,
+      )
+      expect(found.length, `${table} should exist`).toBe(1)
+    }
 
     const scoresCols = await sqlRows("SELECT name FROM pragma_table_info('aknoi_scores')")
     const colNames = scoresCols.map((row) => row.name)
@@ -358,7 +368,7 @@ describe('server leaderboard', () => {
   })
 
   it('every PHP file has no parse errors', async () => {
-    for (const file of ['install.php', 'index.php', 'submit.php', 'login.php', 'register.php', 'logout.php']) {
+    for (const file of ['install.php', 'index.php', 'alltime.php', 'submit.php', 'login.php', 'register.php', 'logout.php']) {
       try {
         await php.run({ code: `<?php require '/www/${file}';` })
       } catch (error) {
@@ -384,13 +394,18 @@ describe('server leaderboard', () => {
     expect(res.status).toBe(302)
     expect(res.location).toBe('./')
 
-    // 已自动登录：导航里出现用户名。
+    // 已自动登录：导航里出现用户名，周榜/总榜链接都在。
     const home = await get('/')
     expect(home.html).toContain('class="who">alice<')
-    expect(home.html).toContain('本周榜')
+    expect(home.html).toContain('>周榜<')
+    expect(home.html).toContain('>总榜<')
+    expect(home.html).toContain('本周种子')
+    expect(home.html).toContain(`<code>${WEEKLY_SEED}</code>`)
+    expect(home.html).toContain('共 0 人')
+    // 周榜种子固定，没有种子筛选表单，也没有“显示全部记录”。
+    expect(home.html).not.toContain('name="seed"')
     expect(home.html).not.toContain('显示每个人的全部记录')
     expect(home.html).not.toContain('scope')
-    expect(home.html).toContain('共 0 人')
   })
 
   it('rejects duplicate usernames and wrong passwords', async () => {
@@ -424,8 +439,8 @@ describe('server leaderboard', () => {
     expect(home.html).toContain('class="who">alice<')
   })
 
-  it('uploads a finished game: stored, ranked #1, one row only', async () => {
-    const aliceBest = finishedReplay('ALICE-BEST', 20260815)
+  it('uploads a game on the weekly seed: counted on both boards', async () => {
+    const aliceBest = finishedReplay(WEEKLY_SEED, 20260815)
 
     const submitPage = await get('/submit.php')
     expect(submitPage.html).toContain('以账号 <strong>alice</strong> 的身份上传')
@@ -434,22 +449,29 @@ describe('server leaderboard', () => {
       csrf: csrfOf(submitPage.html),
       replay: new File([replayDat(aliceBest)], `AKNOI-${aliceBest.seed}.dat`),
     })
-    expect(res.html).toContain('上传成功，分数已通过服务端重算校验。')
-    expect(res.html).toContain('第 1 名')
+    expect(res.html).toContain('已同时计入周榜和总榜')
     expect(res.html).toContain(`<td><strong>${displayScore(aliceBest.score)}</strong>`)
 
-    // SQL 里只有一行，就是最好成绩。
-    const rows = await sqlRows('SELECT COUNT(*) AS n, MAX(score) AS best FROM aknoi_scores')
-    expect(Number(rows[0].n)).toBe(1)
-    expect(Number(rows[0].best)).toBeCloseTo(aliceBest.score, 6)
+    // 周榜、总榜各只有一行。
+    const weekly = await sqlRows('SELECT COUNT(*) AS n, MAX(score) AS best FROM aknoi_scores')
+    expect(Number(weekly[0].n)).toBe(1)
+    expect(Number(weekly[0].best)).toBeCloseTo(aliceBest.score, 6)
+    const alltime = await sqlRows('SELECT COUNT(*) AS n, MAX(score) AS best FROM aknoi_alltime')
+    expect(Number(alltime[0].n)).toBe(1)
+    expect(Number(alltime[0].best)).toBeCloseTo(aliceBest.score, 6)
 
-    const home = await get('/')
-    expect(home.html).toContain('共 1 人')
-    expect(home.html).toContain('<td>alice</td>')
+    const weekPage = await get('/')
+    expect(weekPage.html).toContain('共 1 人')
+    expect(weekPage.html).toContain('<td>alice</td>')
+
+    const alltimePage = await get('/alltime.php')
+    expect(alltimePage.html).toContain('不限定种子')
+    expect(alltimePage.html).toContain('共 1 人')
+    expect(alltimePage.html).toContain('<td>alice</td>')
   })
 
-  it('rejects equal or worse replays; a better one updates the single row', async () => {
-    const aliceBest = finishedReplay('ALICE-BEST', 20260815)
+  it('rejects equal or worse replays; a better one updates the single row on both boards', async () => {
+    const aliceBest = finishedReplay(WEEKLY_SEED, 20260815)
 
     // 同样的文件再传一次：等于本周最好成绩 → 拒绝。
     const submitPage = await get('/submit.php')
@@ -459,10 +481,10 @@ describe('server leaderboard', () => {
     })
     expect(same.html).toContain('没有超过你本周的最好成绩')
 
-    // 更差的一局（直接提交的低分局）→ 拒绝。
+    // 更差的一局（同种子直接提交的低分局）→ 拒绝。
     let worse: ReturnType<typeof finishedReplay> | null = null
-    for (const seed of ['ALICE-WORSE1', 'ALICE-WORSE2', 'ALICE-WORSE3']) {
-      const candidate = finishedReplay(seed, 0, 0)
+    for (const rngSeed of [1, 2, 3]) {
+      const candidate = finishedReplay(WEEKLY_SEED, rngSeed, 0)
       if (candidate.score < aliceBest.score) {
         worse = candidate
         break
@@ -475,33 +497,30 @@ describe('server leaderboard', () => {
     })
     expect(bad.html).toContain('没有超过你本周的最好成绩')
 
-    // 更高的一局 → 原地更新，行数不变。
+    // 更高的一局（同种子）→ 两个榜都原地更新，行数不变。
     let better: ReturnType<typeof finishedReplay> | null = null
-    for (const [seed, rngSeed] of [
-      ['ALICE-NEW1', 999],
-      ['ALICE-NEW2', 777],
-      ['ALICE-NEW3', 555],
-    ] as const) {
-      const candidate = finishedReplay(seed, rngSeed)
+    for (const rngSeed of [999, 777, 555, 333]) {
+      const candidate = finishedReplay(WEEKLY_SEED, rngSeed)
       if (candidate.score > aliceBest.score) {
         better = candidate
         break
       }
     }
     if (!better) throw new Error('no better game found')
-    if (better.seed === aliceBest.seed) throw new Error('same seed')
 
     const ok = await post('/submit.php', {
       csrf: csrfOf(submitPage.html),
       replay: new File([replayDat(better)], 'better.dat'),
     })
-    expect(ok.html).toContain('比本周最好成绩更高，记录已更新。')
+    expect(ok.html).toContain('已同时计入周榜和总榜')
 
-    const rows = await sqlRows('SELECT COUNT(*) AS n, MAX(score) AS best, week_key FROM aknoi_scores')
-    expect(Number(rows[0].n)).toBe(1)
-    expect(Number(rows[0].best)).toBeCloseTo(better.score, 6)
-    expect(String(rows[0].week_key)).toMatch(/^\d{4}-W\d{2}$/)
-    aliceBestSeed = better.seed
+    const weekly = await sqlRows('SELECT COUNT(*) AS n, MAX(score) AS best, week_key FROM aknoi_scores')
+    expect(Number(weekly[0].n)).toBe(1)
+    expect(Number(weekly[0].best)).toBeCloseTo(better.score, 6)
+    expect(String(weekly[0].week_key)).toMatch(/^\d{4}-W\d{2}$/)
+    const alltime = await sqlRows('SELECT COUNT(*) AS n, MAX(score) AS best FROM aknoi_alltime')
+    expect(Number(alltime[0].n)).toBe(1)
+    expect(Number(alltime[0].best)).toBeCloseTo(better.score, 6)
   })
 
   it('rejects unfinished games', async () => {
@@ -526,11 +545,11 @@ describe('server leaderboard', () => {
     expect(res.html).toContain('这局还没打完')
   })
 
-  it('a second account uploads and the board shows both, best first', async () => {
-    const aliceBest = Number((await sqlRows('SELECT MAX(score) AS best FROM aknoi_scores'))[0].best)
+  it('a non-weekly-seed game only counts for the alltime board', async () => {
+    const aliceBest = Number((await sqlRows('SELECT MAX(score) AS best FROM aknoi_alltime'))[0].best)
     let bobGame: ReturnType<typeof finishedReplay> | null = null
-    for (const seed of ['BOB-GAME1', 'BOB-GAME2', 'BOB-GAME3', 'BOB-GAME4', 'BOB-GAME5']) {
-      const candidate = finishedReplay(seed, 0, 0) // 立即提交的低分局
+    for (const rngSeed of [11, 22, 33, 44, 55]) {
+      const candidate = finishedReplay('BOBSEED1', rngSeed, 0) // 立即提交的低分局
       if (candidate.score < aliceBest) {
         bobGame = candidate
         break
@@ -554,21 +573,59 @@ describe('server leaderboard', () => {
       csrf: csrfOf(submitPage.html),
       replay: new File([replayDat(bobGame)], 'bob.dat'),
     })
-    expect(ok.html).toContain('上传成功')
+    expect(ok.html).toContain('已计入总榜')
+    expect(ok.html).toContain('不是本周种子')
 
-    const home = await get('/')
-    expect(home.html).toContain('共 2 人')
-    expect(home.html).toContain('<td>alice</td>')
-    expect(home.html).toContain('<td>bob</td>')
-    // 分数高的 alice 排在 bob 前面。
-    expect(home.html.indexOf('<td>alice</td>')).toBeLessThan(home.html.indexOf('<td>bob</td>'))
+    // 周榜没变（bob 的种子不是本周种子），总榜多了一行。
+    const weekly = await sqlRows('SELECT COUNT(*) AS n FROM aknoi_scores')
+    expect(Number(weekly[0].n)).toBe(1)
+    const alltime = await sqlRows('SELECT COUNT(*) AS n FROM aknoi_alltime')
+    expect(Number(alltime[0].n)).toBe(2)
 
-    // 种子筛选：不存在的种子 → 空榜；alice 的种子 → 只剩 alice。
-    const empty = await get('/?seed=NOPE')
-    expect(empty.html).toContain('本周还没有成绩')
-    const filtered = await get(`/?seed=${aliceBestSeed}`)
-    expect(filtered.html).toContain('<td>alice</td>')
-    expect(filtered.html).not.toContain('<td>bob</td>')
+    // 周榜只有 alice；总榜两人都有，分高的 alice 在前。
+    const weekPage = await get('/')
+    expect(weekPage.html).toContain('共 1 人')
+    expect(weekPage.html).toContain('<td>alice</td>')
+    expect(weekPage.html).not.toContain('<td>bob</td>')
+
+    const alltimePage = await get('/alltime.php')
+    expect(alltimePage.html).toContain('共 2 人')
+    expect(alltimePage.html).toContain('<td>alice</td>')
+    expect(alltimePage.html).toContain('<td>bob</td>')
+    expect(alltimePage.html.indexOf('<td>alice</td>')).toBeLessThan(
+      alltimePage.html.indexOf('<td>bob</td>'),
+    )
+
+    // 总榜种子筛选。
+    const aliceOnly = await get(`/alltime.php?seed=${WEEKLY_SEED}`)
+    expect(aliceOnly.html).toContain('<td>alice</td>')
+    expect(aliceOnly.html).not.toContain('<td>bob</td>')
+    const bobOnly = await get('/alltime.php?seed=BOBSEED1')
+    expect(bobOnly.html).toContain('<td>bob</td>')
+    expect(bobOnly.html).not.toContain('<td>alice</td>')
+    const empty = await get('/alltime.php?seed=NOPE')
+    expect(empty.html).toContain('这个种子还没有成绩')
+  })
+
+  it('re-running install backfills the alltime board from weekly rows', async () => {
+    // 清空总榜，再跑一次 install：总榜应为空，install 会把周榜里
+    // 每个账号的最好成绩回填进总榜。
+    await runPhp(`<?php
+require '/www/db/db.php';
+$db->query('DELETE FROM aknoi_alltime');
+echo 'cleared';
+`)
+
+    const res = await handler.request({ url: '/install.php?token=test-token' })
+    expect(res.httpStatusCode).toBe(200)
+    expect(res.text).toContain('回填')
+
+    const weekly = await sqlRows('SELECT MAX(score) AS best FROM aknoi_scores')
+    const alltime = await sqlRows(
+      'SELECT COUNT(*) AS n, MAX(score) AS best FROM aknoi_alltime',
+    )
+    expect(Number(alltime[0].n)).toBe(1)
+    expect(Number(alltime[0].best)).toBeCloseTo(Number(weekly[0].best), 6)
   })
 
   it('anonymous uploads redirect to login', async () => {

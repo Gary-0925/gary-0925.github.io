@@ -79,6 +79,16 @@ function users_table(): string
     return $table;
 }
 
+/** 总榜表名，规则同上。 */
+function alltime_table(): string
+{
+    $table = (string) cfg('alltime_table', 'aknoi_alltime');
+    if (preg_match('/^[A-Za-z0-9_]+$/', $table) !== 1) {
+        throw new RuntimeException('配置中的总榜表名不合法。');
+    }
+    return $table;
+}
+
 /** HTML 转义。 */
 function e(?string $text): string
 {
@@ -166,6 +176,21 @@ function medal_for_rank(int $rank, array $cutoffs): ?array
 function current_week_key(): string
 {
     return date('o-\WW');
+}
+
+/**
+ * 周榜限定的“本周种子”。
+ *
+ * 配置里手动指定就用配置值；留空则按 ISO 周自动生成，
+ * 每周一自动换成新种子，不需要人工维护。
+ */
+function weekly_seed(): string
+{
+    $seed = trim((string) cfg('weekly_seed', ''));
+    if ($seed !== '' && preg_match('/^[A-Za-z0-9_-]{1,32}$/', $seed) === 1) {
+        return $seed;
+    }
+    return 'AKNOI-' . date('o') . '-W' . date('W');
 }
 
 /** 取真实客户端 IP。免费主机前面有反向代理，优先读代理头。 */
@@ -482,6 +507,35 @@ function enforce_rate_limit(dataBase $db): void
     }
 }
 
+/**
+ * 排行榜表格行（周榜、总榜共用）。
+ *
+ * @param array $rows   查询结果行（含 name / seed / score / moves / created_at）
+ * @param array{ gold:int,silver:int,bronze:int } $cutoffs 奖牌线
+ */
+function render_board_rows(array $rows, int $offset, array $cutoffs): string
+{
+    $html = '';
+    foreach ($rows as $index => $row) {
+        $rank = $offset + $index + 1;
+        $medal = medal_for_rank($rank, $cutoffs);
+        $html .= '<tr>'
+            . '<td class="rank">' . $rank . '</td>'
+            . '<td class="medal-col">'
+            . ($medal !== null
+                ? '<span class="medal ' . e($medal['key']) . '" title="' . e($medal['label']) . '">' . e($medal['short']) . '</span>'
+                : '')
+            . '</td>'
+            . '<td>' . e((string) $row['name']) . '</td>'
+            . '<td><code>' . e((string) $row['seed']) . '</code></td>'
+            . '<td class="num"><strong>' . format_display_score((float) $row['score']) . '</strong></td>'
+            . '<td class="num">' . (int) $row['moves'] . '</td>'
+            . '<td class="note">' . e(substr((string) $row['created_at'], 0, 16)) . '</td>'
+            . '</tr>';
+    }
+    return $html;
+}
+
 /** 页面外壳，所有页面共用：顶部导航 + 正文。 */
 function render_page(string $title, string $body): void
 {
@@ -501,7 +555,8 @@ function render_page(string $title, string $body): void
 
     $nav = '<nav class="topnav">'
         . '<span class="brand">AKNOI</span>'
-        . '<a href="./">排行榜</a>'
+        . '<a href="./">周榜</a>'
+        . '<a href="alltime.php">总榜</a>'
         . '<a href="submit.php">上传成绩</a>';
     if ($user !== null) {
         $nav .= '<span class="who">' . e((string) $user['username']) . '</span>'

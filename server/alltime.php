@@ -1,17 +1,13 @@
 <?php
 /**
- * 排行榜首页：周榜。
+ * 总榜（不限种子）。
  *
- * 部署在站点根目录，所以 https://aknoi.page.gd/ 打开就是周榜。
+ * 和 index.php（周榜）一样是普通网页而不是 JSON 接口。
  *
- * 同样是普通网页而不是 JSON 接口：免费主机会拦截非浏览器请求，
- * 直接渲染 HTML 才能保证谁都打得开。
- *
- * 周榜规则：
- *   - 只统计本周（ISO 周，周一 00:00 换榜）的成绩；
- *   - 只统计“本周种子”（见 weekly_seed()）开的局；
- *   - 每个账号每周只存一行 —— 就是本周最好成绩。
- * 不限种子的历史榜在 alltime.php（总榜）。
+ * 总榜规则：
+ *   - 不限定种子，任何种子、任何一周的成绩都算；
+ *   - 每个账号只保留一行 —— 历史最好成绩（上传时更高的分才顶掉旧的）；
+ *   - 可以按种子筛选查看。
  */
 
 declare(strict_types=1);
@@ -28,16 +24,24 @@ $page = max(1, (int) ($_GET['page'] ?? 1));
 $page = min($page, 500);
 $offset = ($page - 1) * $pageSize;
 
-$table = scores_table();
+// 只按种子筛选，值先过白名单再用占位符传进去。
+$seedFilter = trim((string) ($_GET['seed'] ?? ''));
+if ($seedFilter !== '' && preg_match('/^[A-Za-z0-9_-]{1,32}$/', $seedFilter) !== 1) {
+    $seedFilter = '';
+}
+
+$table = alltime_table();
 $usersTable = users_table();
-$weekKey = current_week_key();
-$weekSeed = weekly_seed();
 
-// 周榜只看本周 + 本周种子。
-$where = ['s.week_key = ?', 's.seed = ?'];
-$params = [$weekKey, $weekSeed];
+$where = [];
+$params = [];
 
-$whereSql = ' WHERE ' . implode(' AND ', $where);
+if ($seedFilter !== '') {
+    $where[] = 's.seed = ?';
+    $params[] = $seedFilter;
+}
+
+$whereSql = $where === [] ? '' : ' WHERE ' . implode(' AND ', $where);
 
 $rows = [];
 $total = 0;
@@ -61,8 +65,8 @@ try {
         $params
     )->fetchAll();
 } catch (Throwable $throwable) {
-    error_log('[aknoi] weekly leaderboard failed: ' . $throwable->getMessage());
-    $error = '排行榜暂时读不出来，请稍后再试。';
+    error_log('[aknoi] alltime leaderboard failed: ' . $throwable->getMessage());
+    $error = '总榜暂时读不出来，请稍后再试。';
 }
 
 $totalPages = $total > 0 ? (int) ceil($total / $pageSize) : 1;
@@ -71,23 +75,23 @@ $totalPages = $total > 0 ? (int) ceil($total / $pageSize) : 1;
 $cutoffs = medal_cutoffs($total);
 
 /** 保留当前筛选条件的翻页链接。 */
-function page_link(int $page): string
+function page_link(int $page, string $seed): string
 {
-    return $page > 1 ? '?page=' . $page : './';
+    $query = ['page' => $page];
+    if ($seed !== '') {
+        $query['seed'] = $seed;
+    }
+    return '?' . http_build_query($query);
 }
 
 ob_start();
 ?>
-<h1>周榜</h1>
+<h1>总榜</h1>
 <p class="sub">
-  本周（<?= e($weekKey) ?>，每周一 00:00 换榜）·
-  只统计本周种子 · 每个账号只显示本周最好成绩 · 共 <?= $total ?> 人
+  不限定种子 · 每个账号只保留历史最好成绩
+  <?php if ($seedFilter !== ''): ?>· 种子 <code><?= e($seedFilter) ?></code><?php endif; ?>
+  · 共 <?= $total ?> 人
 </p>
-
-<div class="card">
-  <h2 style="margin-top:0">本周种子</h2>
-  <p style="margin:0">用种子 <code><?= e($weekSeed) ?></code> 开一局并打完，成绩会自动计入本周榜。</p>
-</div>
 
 <?php if ($error !== null): ?>
 <div class="msg bad"><?= e($error) ?></div>
@@ -101,9 +105,16 @@ ob_start();
 </p>
 <?php endif; ?>
 
+<form class="card" method="get">
+  <label for="seed">按种子筛选</label>
+  <input type="text" id="seed" name="seed" maxlength="32" placeholder="留空看全部种子"
+         value="<?= e($seedFilter) ?>">
+  <button type="submit">筛选</button>
+</form>
+
 <div class="card">
 <?php if ($rows === []): ?>
-  <p class="empty">本周还没有用本周种子打的成绩，<a href="submit.php">来上传第一个</a>。</p>
+  <p class="empty"><?= $seedFilter !== '' ? '这个种子还没有成绩。' : '还没有人上传过成绩，<a href="submit.php">来上传第一个</a>。' ?></p>
 <?php else: ?>
   <table>
     <thead>
@@ -125,19 +136,19 @@ ob_start();
   <?php if ($totalPages > 1): ?>
   <p class="pager">
     <?php if ($page > 1): ?>
-    <a href="<?= e(page_link($page - 1)) ?>">← 上一页</a>
+    <a href="<?= e(page_link($page - 1, $seedFilter)) ?>">← 上一页</a>
     <?php endif; ?>
     <span class="note">第 <?= $page ?> / <?= $totalPages ?> 页</span>
     <?php if ($page < $totalPages): ?>
-    <a href="<?= e(page_link($page + 1)) ?>">下一页 →</a>
+    <a href="<?= e(page_link($page + 1, $seedFilter)) ?>">下一页 →</a>
     <?php endif; ?>
   </p>
   <?php endif; ?>
 <?php endif; ?>
 </div>
 
-<p class="note"><a href="alltime.php">查看总榜（不限种子）→</a></p>
+<p class="note"><a href="./">查看周榜（本周种子）→</a></p>
 <p class="note">总分 = 上机分 + 笔试 <?= (int) cfg('written_exam_score', 105) ?> 分，满分 <?= format_score((float) cfg('max_score', 600.0) + (float) cfg('written_exam_score', 105)) ?> 分。</p>
 <p class="note"><a href="submit.php">上传我的成绩 →</a></p>
 <?php
-render_page('周榜', (string) ob_get_clean());
+render_page('总榜', (string) ob_get_clean());

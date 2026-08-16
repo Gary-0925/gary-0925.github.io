@@ -21,6 +21,9 @@ $defaults = [
     // 账号表名。
     'users_table' => 'aknoi_users',
 
+    // 总榜表名：每个账号一行，只存历史最好成绩。
+    'alltime_table' => 'aknoi_alltime',
+
     // 访问 install.php 时必须带上的令牌：install.php?token=xxx
     // 保持为空字符串时 install.php 会直接拒绝执行。
     'install_token' => '',
@@ -56,6 +59,11 @@ $defaults = [
 
     // 周榜的时区。周一到周日按这个时区划分，每周一 00:00 换榜。
     'timezone' => 'Asia/Shanghai',
+
+    // 周榜限定的“本周种子”。留空时自动按 ISO 周生成
+    // （形如 AKNOI-2026-W33，每周一自动换一个）。
+    // 想手动指定就在 config.local.php 里覆盖，例如 'weekly_seed' => 'SEED2026A'。
+    'weekly_seed' => '',
 ];
 
 return $defaults;
