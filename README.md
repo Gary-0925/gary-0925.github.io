@@ -56,3 +56,21 @@ npm test
 npm run build
 npm run dev
 ```
+
+## 排行榜（周榜）
+
+排行榜是独立部署的 PHP 站点（`server/` 目录），不随 GitHub Pages 发布。
+
+- **周榜**：只显示本周成绩，每周一 00:00 换榜（时区由 `server/config.php` 的 `timezone` 决定，默认 `Asia/Shanghai`）。上一周的数据会被自动清掉，榜单每周从零开始。
+- **账号**：上传成绩前必须先注册/登录（`register.php` / `login.php`），排行榜上的“选手”就是用户名，不再手填名字。密码用 `password_hash` 加盐存储。
+- **SQL 只存最好成绩**：`aknoi_scores` 表每个账号每周最多一行，只有本周最好成绩。上传的分数比本周已有成绩更高时原地更新那一行，等于或更低直接拒绝——没有“显示全部记录”这种功能了。
+- **防作弊不变**：服务端用 `engine.php`（PHP 移植版引擎）完整重放上传的 `.dat` 存档重算分数，和文件里声称的分数对不上就拒绝；同一局（相同种子 + 相同操作）每周只记录一次；上传限流按 IP。
+
+### 部署
+
+1. 把 `server/` 下的文件放进主机的 `htdocs/`，数据库连接放在 `htdocs/db/db.php`（提供 `$db`，至少要有 `query($sql, $params)` 方法并返回可 `fetch()` / `fetchAll()` 的结果对象）。
+2. 复制 `server/config.php` 为 `server/config.local.php`，填上 `install_token` 和 `ip_salt`。
+3. 访问 `install.php?token=你的令牌` 建表。若检测到旧版成绩表，会先改名备份为 `aknoi_scores_legacy_<时间戳>` 再建新表，旧数据不会丢（但不会自动迁移成账号）。
+4. 建完表后删除 `install.php`。
+
+`server/engine.php` 与 `src/game/engine.ts` 必须逐位一致，改动时请运行 `npm test`（含 PHP 移植版引擎的差分测试）。

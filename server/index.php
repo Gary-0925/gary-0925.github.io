@@ -1,11 +1,14 @@
 <?php
 /**
- * 排行榜首页。
+ * 排行榜首页（周榜）。
  *
  * 部署在站点根目录，所以 https://aknoi.page.gd/ 打开就是排行榜。
  *
  * 同样是普通网页而不是 JSON 接口：免费主机会拦截非浏览器请求，
  * 直接渲染 HTML 才能保证谁都打得开。
+ *
+ * 周榜规则：只显示本周（ISO 周，周一 00:00 换榜）的成绩；
+ * 每个账号每周只存一行 —— 就是他的最好成绩，没有“全部记录”可看。
  */
 
 declare(strict_types=1);
@@ -28,31 +31,16 @@ if ($seedFilter !== '' && preg_match('/^[A-Za-z0-9_-]{1,32}$/', $seedFilter) !==
     $seedFilter = '';
 }
 
-// 每人只留最好的一条。MySQL 5.7 起默认开 ONLY_FULL_GROUP_BY，
-// 这里用 NOT EXISTS 而不是 GROUP BY，避免 SQL 模式差异。
-$bestOnly = ($_GET['scope'] ?? 'best') !== 'all';
-
-$days = leaderboard_days();
 $table = scores_table();
+$usersTable = users_table();
+$weekKey = current_week_key();
 
-// 近一周窗口。INTERVAL 在原生预处理下不能用占位符，所以强转 int 后内插；
-// $days 来自配置且已 clamp 过，不可能带进注入。
-$recentSql = 'created_at >= (NOW() - INTERVAL ' . $days . ' DAY)';
-
-$where = ['s.' . $recentSql];
-$params = [];
+$where = ['s.week_key = ?'];
+$params = [$weekKey];
 
 if ($seedFilter !== '') {
     $where[] = 's.seed = ?';
     $params[] = $seedFilter;
-}
-if ($bestOnly) {
-    // 比较的对手也必须落在同一个时间窗口内，否则上周的旧高分会把
-    // 本周的成绩挤掉，导致榜上出现空缺。
-    $where[] = 'NOT EXISTS (SELECT 1 FROM `' . $table . '` b WHERE b.name = s.name'
-        . ' AND b.' . $recentSql
-        . ($seedFilter !== '' ? ' AND b.seed = s.seed' : '')
-        . ' AND (b.score > s.score OR (b.score = s.score AND b.id < s.id)))';
 }
 
 $whereSql = ' WHERE ' . implode(' AND ', $where);
@@ -70,8 +58,10 @@ try {
 
     // LIMIT / OFFSET 在原生预处理下不能用占位符，所以强转 int 后内插。
     $rows = $db->query(
-        'SELECT s.id, s.name, s.seed, s.score, s.moves, s.created_at'
-        . ' FROM `' . $table . '` s' . $whereSql
+        'SELECT s.id, u.username AS name, s.seed, s.score, s.moves, s.created_at'
+        . ' FROM `' . $table . '` s'
+        . ' JOIN `' . $usersTable . '` u ON u.id = s.user_id'
+        . $whereSql
         . ' ORDER BY s.score DESC, s.moves ASC, s.id ASC'
         . ' LIMIT ' . (int) $pageSize . ' OFFSET ' . (int) $offset,
         $params
@@ -87,14 +77,11 @@ $totalPages = $total > 0 ? (int) ceil($total / $pageSize) : 1;
 $cutoffs = medal_cutoffs($total);
 
 /** 保留当前筛选条件的翻页链接。 */
-function page_link(int $page, string $seed, bool $bestOnly): string
+function page_link(int $page, string $seed): string
 {
     $query = ['page' => $page];
     if ($seed !== '') {
         $query['seed'] = $seed;
-    }
-    if (!$bestOnly) {
-        $query['scope'] = 'all';
     }
     return '?' . http_build_query($query);
 }
@@ -103,10 +90,10 @@ ob_start();
 ?>
 <h1>排行榜</h1>
 <p class="sub">
-  最近 <?= $days ?> 天 ·
-  <?= $bestOnly ? '每位选手只显示最好成绩' : '显示全部记录' ?>
+  本周榜（<?= e($weekKey) ?>，每周一 00:00 换榜）·
+  每个账号只显示本周最好成绩
   <?php if ($seedFilter !== ''): ?>· 种子 <code><?= e($seedFilter) ?></code><?php endif; ?>
-  · 共 <?= $total ?> 条
+  · 共 <?= $total ?> 人
 </p>
 
 <?php if ($error !== null): ?>
@@ -125,17 +112,12 @@ ob_start();
   <label for="seed">按种子筛选</label>
   <input type="text" id="seed" name="seed" maxlength="32" placeholder="留空看全部种子"
          value="<?= e($seedFilter) ?>">
-  <label style="margin-top:12px; font-weight:400">
-    <input type="checkbox" name="scope" value="all" style="width:auto"
-           <?= $bestOnly ? '' : 'checked' ?>>
-    显示每个人的全部记录（默认只看个人最好成绩）
-  </label>
   <button type="submit">筛选</button>
 </form>
 
 <div class="card">
 <?php if ($rows === []): ?>
-  <p class="empty">最近 <?= $days ?> 天还没有成绩，<a href="submit.php">来上传第一个</a>。</p>
+  <p class="empty">本周还没有成绩，<a href="submit.php">来上传第一个</a>。</p>
 <?php else: ?>
   <table>
     <thead>
@@ -175,11 +157,11 @@ ob_start();
   <?php if ($totalPages > 1): ?>
   <p class="pager">
     <?php if ($page > 1): ?>
-    <a href="<?= e(page_link($page - 1, $seedFilter, $bestOnly)) ?>">← 上一页</a>
+    <a href="<?= e(page_link($page - 1, $seedFilter)) ?>">← 上一页</a>
     <?php endif; ?>
     <span class="note">第 <?= $page ?> / <?= $totalPages ?> 页</span>
     <?php if ($page < $totalPages): ?>
-    <a href="<?= e(page_link($page + 1, $seedFilter, $bestOnly)) ?>">下一页 →</a>
+    <a href="<?= e(page_link($page + 1, $seedFilter)) ?>">下一页 →</a>
     <?php endif; ?>
   </p>
   <?php endif; ?>
@@ -189,6 +171,7 @@ ob_start();
 <?php $bonus = (int) cfg('written_exam_score', 105); ?>
 <?php $fullMark = format_score((float) cfg('max_score', 600.0) + (float) $bonus); ?>
 <p class="note">总分 = 上机分 + 笔试 <?= $bonus ?> 分，满分 <?= $fullMark ?> 分。</p>
+<p class="note">周榜每周一 00:00 重置；SQL 里每个账号每周只保留最好的一局，成绩不上榜就说明没超过你本周的最好成绩。</p>
 <p class="note"><a href="submit.php">上传我的成绩 →</a></p>
 <?php
 render_page('排行榜', (string) ob_get_clean());

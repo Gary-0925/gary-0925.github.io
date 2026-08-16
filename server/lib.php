@@ -1,6 +1,6 @@
 <?php
 /**
- * AKNOI 排行榜公共库：配置、上传文件解析、校验、限流。
+ * AKNOI 排行榜公共库：配置、账号、上传文件解析、校验、限流。
  *
  * 这里没有 JSON API。InfinityFree 免费主机会拦截非浏览器请求
  * （要求客户端能执行 JS 并保存 __test cookie），所以排行榜完全做成
@@ -31,6 +31,22 @@ require_once __DIR__ . '/engine.php';
 /** @var array<string,mixed> $AKNOI_CONFIG */
 $AKNOI_CONFIG = require __DIR__ . '/config.php';
 
+// config.local.php（不入库）里的值覆盖默认配置。
+if (is_file(__DIR__ . '/config.local.php')) {
+    $aknoiLocalConfig = require __DIR__ . '/config.local.php';
+    if (is_array($aknoiLocalConfig)) {
+        $AKNOI_CONFIG = array_merge($AKNOI_CONFIG, $aknoiLocalConfig);
+    }
+    unset($aknoiLocalConfig);
+}
+
+// 周榜的“周一”按这个时区划分，保证换榜时刻可预期。
+$aknoiTimezone = (string) ($AKNOI_CONFIG['timezone'] ?? 'Asia/Shanghai');
+if ($aknoiTimezone !== '' && @date_default_timezone_set($aknoiTimezone) === false) {
+    date_default_timezone_set('UTC');
+}
+unset($aknoiTimezone);
+
 /**
  * 读取配置项。
  *
@@ -49,6 +65,16 @@ function scores_table(): string
     $table = (string) cfg('table', 'aknoi_scores');
     if (preg_match('/^[A-Za-z0-9_]+$/', $table) !== 1) {
         throw new RuntimeException('配置中的表名不合法。');
+    }
+    return $table;
+}
+
+/** 账号表名，规则同上。 */
+function users_table(): string
+{
+    $table = (string) cfg('users_table', 'aknoi_users');
+    if (preg_match('/^[A-Za-z0-9_]+$/', $table) !== 1) {
+        throw new RuntimeException('配置中的账号表名不合法。');
     }
     return $table;
 }
@@ -131,11 +157,15 @@ function medal_for_rank(int $rank, array $cutoffs): ?array
     return null;
 }
 
-/** 排行榜统计窗口（天）。只有这个窗口内的成绩会上榜。 */
-function leaderboard_days(): int
+/**
+ * 当前周榜的周标识，形如 2026-W33（ISO 周，周一开始）。
+ *
+ * 周标识在 PHP 里统一算好，再作为参数传给 SQL：
+ * 插入、筛选、清理用的是同一个值，不受 MySQL 时区影响。
+ */
+function current_week_key(): string
 {
-    $days = (int) cfg('leaderboard_days', 7);
-    return $days > 0 ? min($days, 3650) : 7;
+    return date('o-\WW');
 }
 
 /** 取真实客户端 IP。免费主机前面有反向代理，优先读代理头。 */
@@ -187,6 +217,129 @@ function csrf_valid(string $given): bool
     }
     $expected = (string) ($_SESSION['aknoi_csrf'] ?? '');
     return $expected !== '' && hash_equals($expected, $given);
+}
+
+/* ------------------------------------------------------------------ */
+/* 账号                                                               */
+/* ------------------------------------------------------------------ */
+
+/** 当前登录的账号，未登录返回 null。 */
+function current_user(dataBase $db): ?array
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
+    $id = (int) ($_SESSION['aknoi_user_id'] ?? 0);
+    if ($id <= 0) {
+        return null;
+    }
+    $row = $db->query(
+        'SELECT id, username, created_at FROM `' . users_table() . '` WHERE id = ? LIMIT 1',
+        [$id]
+    )->fetch();
+    return is_array($row) ? $row : null;
+}
+
+/** 未登录就跳转登录页，并记住回来时的地址。登录后返回当前账号。 */
+function require_login(dataBase $db): array
+{
+    $user = current_user($db);
+    if ($user !== null) {
+        return $user;
+    }
+    $next = (string) ($_SERVER['REQUEST_URI'] ?? './');
+    header('Location: login.php?next=' . rawurlencode($next));
+    exit;
+}
+
+/** 检查用户名是否已被注册（表上有唯一索引，这只是为了给友好提示）。 */
+function username_taken(dataBase $db, string $username): bool
+{
+    $row = $db->query(
+        'SELECT id FROM `' . users_table() . '` WHERE username = ? LIMIT 1',
+        [$username]
+    )->fetch();
+    return is_array($row);
+}
+
+/**
+ * 校验用户名和密码的格式，不合法时抛出 RuntimeException。
+ * 返回清洗后的用户名。
+ */
+function validate_credentials(string $username, string $password): string
+{
+    $username = clean_name($username);
+    $maxUsername = (int) cfg('max_username_length', 24);
+    if ($username === '') {
+        throw new RuntimeException('请填写用户名。');
+    }
+    if (mb_strlen($username, 'UTF-8') > $maxUsername) {
+        throw new RuntimeException('用户名太长了（最多 ' . $maxUsername . ' 个字）。');
+    }
+
+    $minPassword = (int) cfg('min_password_length', 6);
+    $maxPassword = (int) cfg('max_password_length', 72);
+    if (strlen($password) < $minPassword) {
+        throw new RuntimeException('密码太短了（至少 ' . $minPassword . ' 个字符）。');
+    }
+    if (strlen($password) > $maxPassword) {
+        throw new RuntimeException('密码太长了（最多 ' . $maxPassword . ' 个字节）。');
+    }
+    return $username;
+}
+
+/** 注册新账号并自动登录。已存在同名账号时抛出 RuntimeException。 */
+function register_user(dataBase $db, string $username, string $password): array
+{
+    $username = validate_credentials($username, $password);
+
+    if (username_taken($db, $username)) {
+        throw new RuntimeException('这个用户名已经被注册了，换一个吧。');
+    }
+
+    $db->query(
+        'INSERT INTO `' . users_table() . '` (username, pass_hash, created_at) VALUES (?, ?, NOW())',
+        [$username, password_hash($password, PASSWORD_DEFAULT)]
+    );
+
+    $row = $db->query(
+        'SELECT id, username, created_at FROM `' . users_table() . '` WHERE username = ? LIMIT 1',
+        [$username]
+    )->fetch();
+
+    if (!is_array($row)) {
+        throw new RuntimeException('注册失败，请稍后再试。');
+    }
+
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
+    $_SESSION['aknoi_user_id'] = (int) $row['id'];
+    return $row;
+}
+
+/** 登录。用户名或密码不对时抛出 RuntimeException。 */
+function login_user(dataBase $db, string $username, string $password): array
+{
+    $username = clean_name($username);
+    if ($username === '') {
+        throw new RuntimeException('请填写用户名。');
+    }
+
+    $row = $db->query(
+        'SELECT id, username, pass_hash, created_at FROM `' . users_table() . '` WHERE username = ? LIMIT 1',
+        [$username]
+    )->fetch();
+
+    if (!is_array($row) || !password_verify($password, (string) $row['pass_hash'])) {
+        throw new RuntimeException('用户名或密码不对。');
+    }
+
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
+    $_SESSION['aknoi_user_id'] = (int) $row['id'];
+    return $row;
 }
 
 /**
@@ -329,13 +482,36 @@ function enforce_rate_limit(dataBase $db): void
     }
 }
 
-/** 页面外壳，上传页和排行榜页共用。 */
+/** 页面外壳，所有页面共用：顶部导航 + 正文。 */
 function render_page(string $title, string $body): void
 {
     header('Content-Type: text/html; charset=utf-8');
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: same-origin');
     $safeTitle = e($title);
+
+    $user = null;
+    try {
+        global $db;
+        $user = current_user($db);
+    } catch (Throwable $throwable) {
+        // 数据库不可用时页面仍可打开，只是导航里没有账号信息。
+        error_log('[aknoi] nav user lookup failed: ' . $throwable->getMessage());
+    }
+
+    $nav = '<nav class="topnav">'
+        . '<span class="brand">AKNOI</span>'
+        . '<a href="./">排行榜</a>'
+        . '<a href="submit.php">上传成绩</a>';
+    if ($user !== null) {
+        $nav .= '<span class="who">' . e((string) $user['username']) . '</span>'
+            . '<a class="dim" href="logout.php?csrf=' . e(csrf_token()) . '">退出</a>';
+    } else {
+        $nav .= '<a href="login.php">登录</a>'
+            . '<a class="dim" href="register.php">注册</a>';
+    }
+    $nav .= '</nav>';
+
     echo <<<HTML
 <!doctype html>
 <html lang="zh-CN">
@@ -346,17 +522,24 @@ function render_page(string $title, string $body): void
 <style>
 :root { --bg:#faf8ef; --ink:#5b5148; --muted:#9a8f84; --line:#e3dbd0; --button:#8f7a66; }
 * { box-sizing: border-box; }
-body { margin:0; padding:20px 14px 48px; background:var(--bg); color:var(--ink);
+body { margin:0; padding:0 14px 48px; background:var(--bg); color:var(--ink);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
   font-size:14px; line-height:1.6; }
 .wrap { max-width:860px; margin:0 auto; }
-h1 { font-size:1.6rem; margin:0 0 4px; letter-spacing:.06em; }
+h1 { font-size:1.6rem; margin:16px 0 4px; letter-spacing:.06em; }
 h2 { font-size:1rem; margin:24px 0 8px; }
 .sub { color:var(--muted); font-size:.82rem; margin:0 0 20px; }
 a { color:#7a6752; }
 .card { background:#fff; border:1px solid var(--line); border-radius:6px; padding:16px; margin-bottom:16px; }
+.topnav { display:flex; align-items:center; gap:16px; max-width:860px; margin:0 auto;
+  padding:12px 0; border-bottom:1px solid var(--line); font-size:.85rem; }
+.topnav .brand { font-weight:800; letter-spacing:.08em; }
+.topnav a { color:var(--ink); text-decoration:none; }
+.topnav a:hover { color:#7a6752; text-decoration:underline; }
+.topnav a.dim { color:var(--muted); }
+.topnav .who { margin-left:auto; color:var(--muted); font-size:.8rem; }
 label { display:block; font-weight:700; font-size:.82rem; margin-bottom:6px; }
-input[type=text], input[type=file] { width:100%; padding:8px; border:1px solid var(--line);
+input[type=text], input[type=password], input[type=file] { width:100%; padding:8px; border:1px solid var(--line);
   border-radius:4px; font-size:.88rem; background:#fdfcfa; }
 button { margin-top:12px; padding:9px 18px; border:0; border-radius:4px; background:var(--button);
   color:#fff; font-size:.88rem; font-weight:700; cursor:pointer; }
@@ -383,9 +566,12 @@ ol { padding-left:1.2em; }
 code { background:#f2ede6; padding:1px 5px; border-radius:3px; font-size:.85em; }
 </style>
 </head>
-<body><div class="wrap">
+<body>
+<div class="wrap">
+{$nav}
 {$body}
-</div></body>
+</div>
+</body>
 </html>
 HTML;
 }

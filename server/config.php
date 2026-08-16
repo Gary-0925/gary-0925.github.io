@@ -1,7 +1,9 @@
 <?php
 /**
- * AKNOI 排行榜配置。
- * 它返回的数组会覆盖下面的默认值。
+ * AKNOI 排行榜默认配置。
+ *
+ * 部署时不要改这个文件：复制一份为 config.local.php 再改。
+ * lib.php 会用 config.local.php 返回的数组覆盖下面的默认值：
  *
  *   <?php
  *   return [
@@ -16,6 +18,9 @@ $defaults = [
     // 数据表名。install.php 会按这个名字建表。
     'table' => 'aknoi_scores',
 
+    // 账号表名。
+    'users_table' => 'aknoi_users',
+
     // 访问 install.php 时必须带上的令牌：install.php?token=xxx
     // 保持为空字符串时 install.php 会直接拒绝执行。
     'install_token' => '',
@@ -29,8 +34,12 @@ $defaults = [
     // 一局最多允许多少个操作，防止有人塞一个几百万步的回放把服务器算到超时。
     'max_actions' => 20000,
 
-    // 玩家昵称长度（按字符数计，中文算 1 个）。
-    'max_name_length' => 24,
+    // 用户名长度（按字符数计，中文算 1 个）。
+    'max_username_length' => 24,
+
+    // 密码长度范围（按字节计；bcrypt 只取前 72 字节，所以上限设为 72）。
+    'min_password_length' => 6,
+    'max_password_length' => 72,
 
     // 限流：同一 IP 在 rate_window 秒内最多上传 rate_limit 次。
     'rate_window' => 600,
@@ -45,8 +54,8 @@ $defaults = [
     // 笔试分。库里存的是上机分，展示时统一加上这个数（满分 600 + 105 = 705）。
     'written_exam_score' => 105,
 
-    // 排行榜只统计最近多少天的成绩，奖牌线也按这个窗口内的人数算。
-    'leaderboard_days' => 7,
+    // 周榜的时区。周一到周日按这个时区划分，每周一 00:00 换榜。
+    'timezone' => 'Asia/Shanghai',
 ];
 
 return $defaults;
